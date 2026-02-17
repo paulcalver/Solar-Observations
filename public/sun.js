@@ -1,16 +1,8 @@
 (function() {
   // ── Configuration ──────────────────────────────────────────
-  // All API calls go through our local proxy to avoid CORS
-  const API_BASE = '/api/helioviewer';
-  const POLL_INTERVAL = 3000;
-  const MAX_POLLS = 120;
-
-  // Calculate 24-hour period from now (most recent 24 hours)
+  // Video generation now handled server-side with caching
   const now = new Date();
-  const endTime = new Date(now); // Current time
-  const startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000); // 24 hours ago
-
-  const formatISO = d => d.toISOString().replace('.000Z', 'Z');
+  const endTime = new Date(now); // Current time for display
 
   // ── DOM refs ───────────────────────────────────────────────
   const statusOverlay = document.getElementById('status-overlay');
@@ -128,10 +120,10 @@
     videoContainer.style.display = 'none';
     infoBar.classList.remove('visible');
 
-    // Check cache first
+    // Check localStorage cache first (client-side)
     const cached = getCachedVideo(currentSourceId);
     if (cached && cached.url) {
-      console.log('Using cached video:', cached.url);
+      console.log('Using client cache:', cached.url);
       statusTextEl.textContent = 'Loading from cache...';
       try {
         await loadVideo(cached.url);
@@ -142,92 +134,36 @@
       }
     }
 
-    // Build query params
-    // With cadence=120 (2 min), 24hrs = 720 frames. At 15fps = 48 second video
-    const params = new URLSearchParams({
-      startTime: formatISO(startTime),
-      endTime: formatISO(endTime),
-      layers: `[${currentSourceId},1,100]`,
-      events: '',
-      eventsLabels: false,
-      imageScale: 2.42,   // Adjusted for 4K (2160x2160)
-      x0: 0,
-      y0: 0,
-      width: 1080,        // 4K resolution
-      height: 1080,       // 4K resolution
-      format: 'mp4',
-      frameRate: 15,      // 15 fps for smoother, longer playback
-      cadence: 120,       // Sample 1 image every 120 seconds (2 min)
-      maxFrames: 720,     // 24hrs / 2min = 720 frames
-      watermark: false,
-      scale: false
-      // movieLength removed - duration determined by frames/frameRate (~48 sec)
-    });
-
     try {
-      // 1. Queue the movie via our proxy
-      statusTextEl.textContent = 'Queuing movie generation...';
-      const queueRes = await fetch(`${API_BASE}/queueMovie?${params}`);
+      // Call server endpoint (handles caching server-side)
+      statusTextEl.textContent = 'Requesting solar video...';
+      const response = await fetch('/api/solar-video');
 
-      if (!queueRes.ok) {
-        const errText = await queueRes.text();
-        throw new Error(`Queue request failed (${queueRes.status}): ${errText}`);
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || `Server error: ${response.status}`);
       }
 
-      const queueData = await queueRes.json();
-      const movieId = queueData.id;
-
-      if (!movieId) {
-        throw new Error('No movie ID returned from API');
-      }
-
-      statusTextEl.textContent = `Queued — estimated ${Math.round(queueData.eta)}s wait...`;
-
-      // 2. Poll for completion via our proxy
-      let polls = 0;
-      let movieUrl = null;
-
-      while (polls < MAX_POLLS) {
-        await new Promise(r => setTimeout(r, POLL_INTERVAL));
-        polls++;
-
-        const statusParams = new URLSearchParams({
-          id: movieId,
-          format: 'mp4',
-          verbose: true
-        });
-
-        const statusRes = await fetch(`${API_BASE}/getMovieStatus?${statusParams}`);
-        const statusData = await statusRes.json();
-
-        if (statusData.status === 2) {
-          // Completed — use the direct Helioviewer URL for the video
-          // Video files are served with proper headers from their CDN
-          movieUrl = statusData.url;
-          if (movieUrl && movieUrl.startsWith('http://')) {
-            movieUrl = movieUrl.replace('http://', 'https://');
-          }
-          break;
-        } else if (statusData.status === 3) {
-          throw new Error('Movie generation failed on the server');
-        } else if (statusData.status === 1) {
-          statusTextEl.textContent = 'Generating solar timelapse...';
-        } else {
-          const eta = statusData.eta ? ` (~${Math.round(statusData.eta)}s)` : '';
-          statusTextEl.textContent = `In queue${eta}...`;
-        }
-      }
+      const data = await response.json();
+      const movieUrl = data.url;
 
       if (!movieUrl) {
-        throw new Error('Timed out waiting for movie generation');
+        throw new Error('No video URL returned from server');
       }
 
-      // Cache the video URL
-      cacheVideo(currentSourceId, movieUrl);
+      console.log(data.cached ? '[server cache hit]' : '[server generated new]');
 
-      // 3. Load and play the video
+      // Ensure HTTPS
+      const secureUrl = movieUrl.startsWith('http://')
+        ? movieUrl.replace('http://', 'https://')
+        : movieUrl;
+
+      // Cache in localStorage for this client
+      cacheVideo(currentSourceId, secureUrl);
+
+      // Load and play the video
       statusTextEl.textContent = 'Loading video...';
-      await loadVideo(movieUrl);
+      await loadVideo(secureUrl);
 
     } catch (err) {
       console.error('Solar movie error:', err);

@@ -7,6 +7,13 @@ const PORT = process.env.PORT || 3000;
 // ── Bluesky authentication state ──────────────────────────
 let blueskyAccessToken = null;
 
+// ── Solar video cache ─────────────────────────────────────
+let videoCache = {
+  url: null,
+  timestamp: null,
+  expiresIn: 6 * 60 * 60 * 1000 // 6 hours
+};
+
 // ── Proxy endpoint for Helioviewer API ───────────────────────
 // Declared BEFORE static files so it takes priority.
 // Uses raw query string to preserve bracket characters
@@ -80,6 +87,97 @@ async function authenticateBluesky() {
   }
 }
 
+// ── Solar video generation endpoint ───────────────────────
+app.get('/api/solar-video', async (req, res) => {
+  // Check cache first
+  if (videoCache.url && videoCache.timestamp) {
+    const age = Date.now() - videoCache.timestamp;
+    if (age < videoCache.expiresIn) {
+      console.log(`[solar] Cache hit (age: ${Math.floor(age / 60000)}m)`);
+      return res.json({ url: videoCache.url, cached: true });
+    }
+  }
+
+  console.log('[solar] Cache miss, generating new video...');
+
+  try {
+    // Calculate 24-hour period
+    const now = new Date();
+    const endTime = new Date(now);
+    const startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    const formatISO = d => d.toISOString().replace('.000Z', 'Z');
+
+    // Queue movie request
+    const queueParams = new URLSearchParams({
+      startTime: formatISO(startTime),
+      endTime: formatISO(endTime),
+      layers: '[13,1,100]',
+      imageScale: 1.21,
+      width: 2160,
+      height: 2160,
+      format: 'mp4',
+      frameRate: 15,
+      cadence: 120,
+      maxFrames: 720
+    });
+
+    const queueUrl = `https://api.helioviewer.org/v2/queueMovie/?${queueParams}`;
+    console.log('[solar] Queueing movie...');
+
+    const queueResponse = await fetch(queueUrl);
+    const queueData = await queueResponse.json();
+
+    if (!queueData.id) {
+      throw new Error('Failed to queue movie');
+    }
+
+    const movieId = queueData.id;
+    console.log(`[solar] Movie queued: ${movieId}`);
+
+    // Poll for completion
+    const maxPolls = 120;
+    const pollInterval = 3000;
+    let polls = 0;
+    let videoUrl = null;
+
+    while (polls < maxPolls) {
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+      polls++;
+
+      const statusUrl = `https://api.helioviewer.org/v2/getMovieStatus/?id=${movieId}&format=mp4&verbose=true&callback=false`;
+      const statusResponse = await fetch(statusUrl);
+      const statusData = await statusResponse.json();
+
+      console.log(`[solar] Poll ${polls}/${maxPolls}: ${statusData.status} (${statusData.percent}%)`);
+
+      if (statusData.status === 2) {
+        // Complete
+        videoUrl = statusData.url;
+        break;
+      } else if (statusData.status === 3) {
+        // Error
+        throw new Error(statusData.error || 'Movie generation failed');
+      }
+    }
+
+    if (!videoUrl) {
+      throw new Error('Movie generation timed out');
+    }
+
+    // Cache the result
+    videoCache.url = videoUrl;
+    videoCache.timestamp = Date.now();
+
+    console.log('[solar] ✓ Video generated and cached');
+    res.json({ url: videoUrl, cached: false });
+
+  } catch (err) {
+    console.error('[solar] Generation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Proxy endpoint for Bluesky API ────────────────────────────
 app.get('/api/bluesky/search', async (req, res) => {
   const fullUrl = req.originalUrl;
@@ -127,14 +225,17 @@ app.get('/api/bluesky/search', async (req, res) => {
         }
       }
 
-      throw new Error(`Bluesky API returned ${response.status}`);
+      // Return empty result instead of error - let client handle fallback
+      console.log('[bluesky] API error, returning empty result for fallback');
+      return res.json({ posts: [] });
     }
 
     const data = await response.json();
     res.json(data);
   } catch (err) {
     console.error('[proxy] Bluesky error:', err.message);
-    res.status(500).json({ error: err.message });
+    // Return empty result for fallback instead of 500 error
+    res.json({ posts: [] });
   }
 });
 
