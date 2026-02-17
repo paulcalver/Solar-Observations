@@ -4,6 +4,21 @@
   const now = new Date();
   const endTime = new Date(now); // Current time for display
 
+  // ── Video-ready signal (consumed by bluesky.js) ───────────
+  let resolveVideoReady;
+  window.solarVideoReady = new Promise(r => { resolveVideoReady = r; });
+
+  // ── Loading messages ──────────────────────────────────────
+  const LOADING_MESSAGES = [
+    'Requesting solar data...',
+    'Queuing video from Helioviewer...',
+    'Rendering 24 hours of solar activity...',
+    'Processing ultraviolet imagery...',
+    'Compositing chromosphere frames...',
+    'Almost there...'
+  ];
+  let loadingMsgInterval = null;
+
   // ── DOM refs ───────────────────────────────────────────────
   const statusOverlay = document.getElementById('status-overlay');
   const statusText = document.getElementById('status-text');
@@ -96,6 +111,7 @@
 
         videoEl.play();
         isLoading = false;
+        resolveVideoReady();
         resolve();
       }, { once: true });
 
@@ -139,6 +155,14 @@
     try {
       // Call server endpoint (handles caching server-side)
       statusTextEl.textContent = 'Requesting solar video...';
+
+      // Cycle through loading messages while waiting
+      let msgIndex = 0;
+      loadingMsgInterval = setInterval(() => {
+        msgIndex = (msgIndex + 1) % LOADING_MESSAGES.length;
+        statusTextEl.textContent = LOADING_MESSAGES[msgIndex];
+      }, 3500);
+
       const response = await fetch('/api/solar-video', {
         cache: 'no-store'
       });
@@ -170,11 +194,13 @@
       cacheVideo(currentSourceId, secureUrl);
 
       // Load and play the video
+      if (loadingMsgInterval) clearInterval(loadingMsgInterval);
       statusTextEl.textContent = 'Loading video...';
       await loadVideo(secureUrl);
 
     } catch (err) {
       console.error('Solar movie error:', err);
+      if (loadingMsgInterval) clearInterval(loadingMsgInterval);
       statusOverlay.innerHTML = `
         <div id="error-msg">
           Could not load solar data.<br><br>
@@ -186,6 +212,7 @@
         </div>
       `;
       isLoading = false;
+      resolveVideoReady(); // Still show quotes on error
     }
   }
 
