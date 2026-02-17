@@ -4,6 +4,9 @@ A web piece that overlays individuals observations about the sun — sourced liv
 
 **Live:** https://solar-quotes.onrender.com/
 
+![Solar_Observations_01](https://github.com/user-attachments/assets/a7e96609-6dbe-485d-9ac0-1dcfefa05f2a)
+
+
 ## How it works
 
 1. An Express server queues a 24-hour solar timelapse via the Helioviewer API (304 Å / extreme ultraviolet, 1080×1080 MP4)
