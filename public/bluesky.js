@@ -10,11 +10,22 @@
     'the sun felt',
     'the sun looked',
     'sunlight on',
-    'golden hour',
     'watching the sunset',
     'sunrise this morning',
     'sun on my',
-    'the light today'
+    'beams of light',
+    'sunshine was',
+    'beautiful sun',
+    'the light today',
+    'the sky was',
+    'warm glow',
+    'light through',
+    'the sun was so',
+    'rays of sun',
+    'sunset tonight',
+    'morning light',
+    'golden hour',
+    'sun hitting'
   ];
 
   // ── Curated fallback observations ─────────────────────────
@@ -117,9 +128,13 @@
             // Check for URLs (http://, https://, www., or domain patterns)
             if (p.text.match(/https?:\/\/|www\.|[a-z0-9-]+\.(com|org|net|io|co)/i)) return false;
             // Filter out newspaper references and news-style posts
-            if (p.text.match(/sun-times|daily sun|the sun newspaper|the sun (reports?|says?|published|wrote|exclusive|revealed|claims?)|in the sun|on the sun|from the sun|breaking|headlines?|article|news:/i)) return false;
+            if (p.text.match(/sun-times|daily sun|the sun newspaper|telegraph|the sun (reports?|says?|published|wrote|exclusive|revealed|claims?)|in the sun|on the sun|from the sun|breaking|headlines?|article|news:/i)) return false;
             // Filter out birthday references
             if (p.text.match(/birthday/i)) return false;
+            // Filter out photography hashtags and VRChat
+            if (p.text.match(/#photograph|#photo\b|#vrc|vrchat/i)) return false;
+            // Filter out posts containing emoji
+            if (/\p{Emoji_Presentation}|\p{Extended_Pictographic}/u.test(p.text)) return false;
             // Filter out inappropriate or off-topic content
             if (p.text.match(/sex|dungeon|nsfw|18\+|explicit|porn|dick|fuck|shit|damn|hell(?!o)|ass(?!ume)|bitch/i)) return false;
             // Filter out hate speech and discriminatory content
@@ -134,7 +149,7 @@
 
             // Prefer posts with sensory/descriptive/observational words
             const hasSensoryWords = p.text.match(/\b(felt|looked|feel|feels|warm|bright|soft|gentle|beautiful|gorgeous|stunning|hot|cold|blazing|pale|golden|orange|red|pink|violet|yellow|glow|glowing|shining|shimmering|light|shadow|sky|clouds|horizon|morning|evening|afternoon|today|yesterday|watching|seeing|saw)\b/i);
-            const hasWeatherWords = p.text.match(/\b(sky|cloud|clouds|horizon|atmosphere|air|wind|weather)\b/i);
+            const hasWeatherWords = p.text.match(/\b(sky|cloud|clouds|horizon|atmosphere|air|wind|mist|haze|weather)\b/i);
 
             // Boost quality: prefer posts with sensory or weather words (but don't require them)
             // This is a soft filter - we keep posts without these words but they're lower quality
