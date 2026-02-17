@@ -171,12 +171,19 @@
 
           console.log(`[bluesky] Found ${newPosts.length} for "${phrase}", total: ${posts.length}`);
 
-          // Show first post immediately when we get results
+          // Show first post once video is ready
           if (!hasShownFirstPost && posts.length > 0) {
-            console.log(`[bluesky] Showing first post, will continue gathering more...`);
-            currentIndex = 0;
-            showCurrentPost();
             hasShownFirstPost = true;
+            currentIndex = 0;
+            // Wait for the solar video to be ready before showing quotes
+            if (window.solarVideoReady) {
+              window.solarVideoReady.then(() => {
+                console.log(`[bluesky] Video ready, showing first post`);
+                showCurrentPost();
+              });
+            } else {
+              showCurrentPost();
+            }
           }
           // Continue to next phrase to gather more posts
         } else {
@@ -201,7 +208,15 @@
     console.log('[bluesky] Using curated fallback posts');
     posts = [...CURATED_POSTS].sort(() => Math.random() - 0.5);
     currentIndex = 0;
-    showCurrentPost();
+    // Wait for the solar video to be ready before showing quotes
+    if (window.solarVideoReady) {
+      window.solarVideoReady.then(() => {
+        console.log(`[bluesky] Video ready, showing fallback post`);
+        showCurrentPost();
+      });
+    } else {
+      showCurrentPost();
+    }
   }
 
 
