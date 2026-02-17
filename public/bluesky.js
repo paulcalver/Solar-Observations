@@ -152,7 +152,7 @@
           const uniquePosts = Array.from(new Map(allPosts.map(p => [p.text, p])).values());
           const shuffledPosts = shuffleArray(uniquePosts);
 
-          posts = shuffledPosts.slice(0, 50); // Keep max 50 posts in rotation (increased from 30)
+          posts = shuffledPosts.slice(0, 400); // Keep max 400 posts in rotation (increased from 100 to allow more variety)
 
           console.log(`[bluesky] Found ${newPosts.length} for "${phrase}", total: ${posts.length}`);
 
