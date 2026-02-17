@@ -3,7 +3,7 @@
 
 (function() {
   const BLUESKY_API = '/api/bluesky/search';
-  const AUTO_ROTATE_INTERVAL = 10000; // 10 seconds
+  const AUTO_ROTATE_INTERVAL = 12000; // 12 seconds
   const FETCH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
   const SEARCH_PHRASES = [
@@ -105,9 +105,13 @@
             // Check for URLs (http://, https://, www., or domain patterns)
             if (p.text.match(/https?:\/\/|www\.|[a-z0-9-]+\.(com|org|net|io|co)/i)) return false;
             // Filter out newspaper references and news-style posts
-            if (p.text.match(/sun-times|daily sun|the sun newspaper|breaking|headlines?|article|news:/i)) return false;
+            if (p.text.match(/sun-times|daily sun|the sun newspaper|the sun (reports?|says?|published|wrote|exclusive|revealed|claims?)|in the sun|on the sun|from the sun|breaking|headlines?|article|news:/i)) return false;
+            // Filter out birthday references
+            if (p.text.match(/birthday/i)) return false;
             // Filter out inappropriate or off-topic content
             if (p.text.match(/sex|dungeon|nsfw|18\+|explicit|porn|dick|fuck|shit|damn|hell(?!o)|ass(?!ume)|bitch/i)) return false;
+            // Filter out hate speech and discriminatory content
+            if (p.text.match(/racist|propaganda|racism|antisemitic|antisemitism|islamophob|xenophob|homophob|transphob|bigot|nazi|kkk|white supremac/i)) return false;
             // Filter out sports teams and sports content
             if (p.text.match(/phoenix suns|gold coast suns|jacksonville suns|the suns (win|lose|beat|play|vs|defeat|scored)|suns (game|win|lose|beat|play|vs|defeat|scored)|#nba|#afl|#nfl|#mlb|#nhl|afl grand final|football|basketball|baseball|soccer/i)) return false;
             // Filter out date references (Sunday, Sun 16th, Sun, 22 Feb, Sun, Feb 22, 2026, etc.)
@@ -160,6 +164,32 @@
   }
 
 
+  // ── Scale text to fit ─────────────────────────────────────
+  function scaleTextToFit() {
+    const maxSize = 48;
+    const minSize = 24;
+
+    // Use viewport dimensions for more reliable sizing
+    const maxWidth = window.innerWidth * 0.85; // 85% of viewport width
+    const maxHeight = window.innerHeight * 0.5; // 50% of viewport height
+
+    let fontSize = maxSize;
+    postText.style.fontSize = fontSize + 'px';
+
+    // Check if text overflows by comparing scroll vs client dimensions
+    while (fontSize > minSize) {
+      const textWidth = postText.scrollWidth;
+      const textHeight = postText.scrollHeight;
+
+      if (textWidth <= maxWidth && textHeight <= maxHeight) {
+        break; // Fits, stop scaling down
+      }
+
+      fontSize -= 2;
+      postText.style.fontSize = fontSize + 'px';
+    }
+  }
+
   // ── Display current post ───────────────────────────────────
   function showCurrentPost() {
     if (posts.length === 0) {
@@ -177,6 +207,9 @@
       const displayText = post.text.startsWith('"') ? post.text : `"${post.text}"`;
       postText.textContent = displayText;
       postMeta.textContent = `@${post.author} · ${post.time}`;
+
+      // Scale text to fit container
+      scaleTextToFit();
 
       // Fade in
       overlay.style.opacity = '1';
