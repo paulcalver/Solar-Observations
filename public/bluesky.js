@@ -79,7 +79,7 @@
 
       try {
         // Call through authenticated proxy
-        const url = `${BLUESKY_API}?q=${encodeURIComponent(phrase)}&limit=25&sort=latest&lang=en`;
+        const url = `${BLUESKY_API}?q=${encodeURIComponent(phrase)}&limit=50&sort=latest&lang=en`;
 
         console.log(`[bluesky] Fetching: "${phrase}" (attempt ${attempts}/${maxAttempts})`);
 
@@ -99,7 +99,15 @@
             text: post.record?.text || '',
             author: post.author?.handle?.replace('.bsky.social', '') || 'unknown',
             time: formatRelativeTime(post.record?.createdAt || new Date().toISOString())
-          })).filter(p => p.text.length > 0 && p.text.length < 200); // Filter too short/long
+          })).filter(p => {
+            // Filter out: empty, too short, too long, or contains links
+            if (p.text.length === 0 || p.text.length > 200) return false;
+            // Check for URLs (http://, https://, www., or domain patterns)
+            if (p.text.match(/https?:\/\/|www\.|[a-z0-9-]+\.(com|org|net|io|co)/i)) return false;
+            // Filter out newspaper references and news-style posts
+            if (p.text.match(/sun-times|daily sun|the sun newspaper|breaking|headlines?|article|news:/i)) return false;
+            return true;
+          });
 
           // Combine with existing posts, deduplicate
           const allPosts = [...posts, ...newPosts];
