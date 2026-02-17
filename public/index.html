@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Solar Activity Loop</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400&family=Instrument+Serif&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+
+<!-- p5.js library -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.2/p5.min.js"></script>
+</head>
+<body>
+
+<div id="app">
+  <div id="status-overlay">
+    <div class="spinner"></div>
+    <div id="status-text">Requesting solar data...</div>
+  </div>
+
+  <div id="video-container" style="display:none;">
+    <video id="solar-video" loop muted playsinline preload="auto"></video>
+  </div>
+</div>
+
+<div id="info-bar">
+  <div id="info-left">
+    <!-- <div id="info-title">Solar Activity</div> -->
+    <div id="info-date"></div>
+  </div>
+  <div id="info-right">
+    <div id="info-wavelength">304 Å — Chromosphere</div>
+    <div id="info-source">SDO / AIA via Helioviewer</div>
+  </div>
+</div>
+
+<script src="sun.js"></script>
+<script src="sketch.js"></script>
+
+</body>
+</html>

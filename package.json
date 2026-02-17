@@ -1,0 +1,11 @@
+{
+  "name": "solar-loop",
+  "version": "1.0.0",
+  "description": "Solar activity video loop viewer using Helioviewer API",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
