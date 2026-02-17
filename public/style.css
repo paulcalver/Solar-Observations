@@ -103,18 +103,22 @@ body {
 }
 
 #info-title {
-  font-family: 'Instrument Serif', serif;
-  font-size: 22px;
-  color: var(--text);
-  letter-spacing: 0.01em;
+  font-size: 11px;
+  font-weight: 300;
+  color: #ffffff;
+  letter-spacing: 0.1em;
+  
+  text-transform: uppercase;
 }
 
 #info-date {
   font-size: 11px;
   font-weight: 300;
-  color: var(--text-dim);
+  /* color: var(--text-dim); */
+  color: #ffffff;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  opacity: 0.5;
 }
 
 #info-right {
@@ -127,14 +131,17 @@ body {
 #info-wavelength {
   font-size: 11px;
   font-weight: 300;
-  color: var(--text-dim);
+  color: #ffffff;
   letter-spacing: 0.1em;
+  opacity: 0.5;
+  
 }
 
 #info-source {
   font-size: 10px;
   font-weight: 300;
-  color: var(--text-dim);
+  /* color: var(--text-dim); */
+  color: #ffffff;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   opacity: 0.5;
@@ -176,7 +183,8 @@ body {
   font-size: 48px;
   font-weight: 400;
   line-height: 1.4;
-  color: var(--text);
+  /* color: var(--text); */
+  color: #ffffff;
   letter-spacing: -0.01em;
 }
 
@@ -194,7 +202,7 @@ body {
 /* Fade in animation */
 @keyframes fadeIn {
   from { opacity: 0; transform: scale(0.96); }
-  to { opacity: 1; transform: scale(1); }
+  to { opacity: 0.5; transform: scale(1); }
 }
 
 .fade-in {
