@@ -62,6 +62,16 @@
     return `${diffDays}d ago`;
   }
 
+  // ── Shuffle array (Fisher-Yates) ──────────────────────────
+  function shuffleArray(array) {
+    const shuffled = [...array];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+  }
+
   // ── Fetch posts from Bluesky ───────────────────────────────
   async function fetchPosts() {
     // Try ALL search phrases to gather as many posts as possible
@@ -137,11 +147,12 @@
             return true;
           });
 
-          // Combine with existing posts, deduplicate
+          // Combine with existing posts, deduplicate, and shuffle
           const allPosts = [...posts, ...newPosts];
           const uniquePosts = Array.from(new Map(allPosts.map(p => [p.text, p])).values());
+          const shuffledPosts = shuffleArray(uniquePosts);
 
-          posts = uniquePosts.slice(0, 50); // Keep max 50 posts in rotation (increased from 30)
+          posts = shuffledPosts.slice(0, 50); // Keep max 50 posts in rotation (increased from 30)
 
           console.log(`[bluesky] Found ${newPosts.length} for "${phrase}", total: ${posts.length}`);
 
