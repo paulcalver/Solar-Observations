@@ -7,12 +7,14 @@
   const FETCH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
   const SEARCH_PHRASES = [
-    'sun',
-    'sunshine',
+    'the sun felt',
+    'the sun looked',
+    'sunlight on',
     'golden hour',
-    'sunset',
-    'sunrise',
-    'sunlight'
+    'watching the sunset',
+    'sunrise this morning',
+    'sun on my',
+    'the light today'
   ];
 
   // ── Curated fallback observations ─────────────────────────
@@ -119,6 +121,19 @@
             // Must contain sun-related words to avoid false matches
             const hasSunWord = p.text.match(/\b(sun|sunshine|sunlight|sunset|sunrise|golden hour|solar|sunny)\b/i);
             if (!hasSunWord) return false;
+
+            // Prefer posts with sensory/descriptive/observational words
+            const hasSensoryWords = p.text.match(/\b(felt|looked|feel|feels|warm|bright|soft|gentle|beautiful|gorgeous|stunning|hot|cold|blazing|pale|golden|orange|red|pink|violet|yellow|glow|glowing|shining|shimmering|light|shadow|sky|clouds|horizon|morning|evening|afternoon|today|yesterday|watching|seeing|saw)\b/i);
+            const hasWeatherWords = p.text.match(/\b(sky|cloud|clouds|horizon|atmosphere|air|wind|weather)\b/i);
+
+            // Boost quality: prefer posts with sensory or weather words (but don't require them)
+            // This is a soft filter - we keep posts without these words but they're lower quality
+            if (!hasSensoryWords && !hasWeatherWords) {
+              // Skip posts that have no descriptive quality
+              // But keep very short poetic ones (under 50 chars often poetic)
+              if (p.text.length > 50) return false;
+            }
+
             return true;
           });
 
