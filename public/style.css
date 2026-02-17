@@ -208,3 +208,19 @@ body {
 .fade-in {
   animation: fadeIn 1.5s ease forwards;
 }
+
+/* Small viewports */
+@media (max-width: 768px) {
+  #info-right {
+    display: none;
+  }
+
+  #info-bar {
+    justify-content: center;
+  }
+
+  #info-left {
+    align-items: center;
+    text-align: center;
+  }
+}
