@@ -1,42 +1,62 @@
-# Solar Activity Loop Viewer
+# Solar
 
-Displays a smooth looping video of the previous day's solar activity from NASA's Solar Dynamics Observatory (SDO), via the Helioviewer API.
+A web piece that overlays individuals observations about the sun — sourced live from Bluesky — onto a looping 24-hour timelapse of the solar chromosphere from NASA's Solar Dynamics Observatory.
+
+**Live:** https://solar-quotes.onrender.com/
+
+## How it works
+
+1. An Express server queues a 24-hour solar timelapse via the Helioviewer API (304 Å / extreme ultraviolet, 1080×1080 MP4)
+2. While the video renders, cycling status messages keep the viewer informed
+3. In parallel, the server proxies authenticated searches against the Bluesky API, gathering real observations people have posted about the sun
+4. Once the video is ready, quotes fade in one at a time over the looping sun, auto-rotating every 12 seconds
+5. If the Bluesky API is unavailable, a set of curated poetic fallbacks is used instead
 
 ## Setup
 
 ```bash
-# Install dependencies
 npm install
-
-# Start the server
 npm start
 ```
 
-Then open **http://localhost:3000** in your browser.
+Open **http://localhost:3000**.
 
-## How it works
+### Environment variables
 
-1. A small Express server acts as a proxy for the Helioviewer API (which doesn't support CORS for browser-side requests)
-2. The frontend requests a 24-hour timelapse of yesterday's solar activity
-3. Helioviewer generates an MP4 server-side (takes 30s to a few minutes)
-4. The video plays in a seamless loop with a circular mask
+Create a `.env` file:
 
-## Wavelengths
+```
+BLUESKY_IDENTIFIER=your-handle.bsky.social
+BLUESKY_APP_PASSWORD=your-app-password
+```
 
-Switch between different views of the sun using the buttons:
+## Architecture
 
-- **304 Å** — Chromosphere, fiery orange/red
-- **171 Å** — Coronal loops, electric blue
-- **193 Å** — Corona, teal/green
-- **335 Å** — Active regions, deep blue/purple
-- **1600 Å** — Transition region, yellow
+```
+server.js          Express server — Helioviewer proxy, Bluesky auth + search proxy, video caching
+public/
+  index.html       Shell — video container, quote overlay, info bar
+  sun.js           Helioviewer video loading, sizing, loading-state feedback
+  bluesky.js       Bluesky post fetching, filtering, display rotation
+  sketch.js        p5.js canvas (reserved)
+  style.css        Layout, typography, animations
+```
+
+### API endpoints
+
+| Route | Purpose |
+|-------|---------|
+| `GET /api/solar-video` | Queue + poll a 24-hour solar timelapse, 6-hour server cache |
+| `GET /api/bluesky/search` | Authenticated proxy to Bluesky `searchPosts` |
+| `GET /api/helioviewer/:endpoint` | Generic Helioviewer API proxy |
 
 ## Requirements
 
 - Node.js 18+ (uses native `fetch`)
-- Internet connection (fetches data from api.helioviewer.org)
+- Bluesky account with an app password
+- Internet connection (Helioviewer + Bluesky APIs)
 
-## API Reference
+## Credits
 
-- [Helioviewer API v2 Documentation](https://api.helioviewer.org/docs/v2/)
-- [SDO Data Sources](https://api.helioviewer.org/docs/v2/appendix/data_sources.html)
+- Solar imagery: [NASA SDO](https://sdo.gsfc.nasa.gov/) via [Helioviewer](https://helioviewer.org/)
+- Quotes: [Bluesky Social](https://bsky.social/)
