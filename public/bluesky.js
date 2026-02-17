@@ -207,7 +207,7 @@
 
   // ── Scale text to fit ─────────────────────────────────────
   function scaleTextToFit() {
-    const maxSize = 48;
+    const maxSize = 36;
     const minSize = 24;
 
     // Use viewport dimensions for more reliable sizing
