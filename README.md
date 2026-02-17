@@ -38,7 +38,6 @@ public/
   index.html       Shell — video container, quote overlay, info bar
   sun.js           Helioviewer video loading, sizing, loading-state feedback
   bluesky.js       Bluesky post fetching, filtering, display rotation
-  sketch.js        p5.js canvas (reserved)
   style.css        Layout, typography, animations
 ```
 
