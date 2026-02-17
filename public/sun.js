@@ -55,7 +55,7 @@
     // Sun disk fills ~75% of the video frame (810/1080).
     // Scale container so the disk edge aligns with the viewport edge.
     const minDim = Math.min(window.innerWidth, window.innerHeight);
-    const size = minDim * (1080 / 580);
+    const size = minDim * (1080 / 900);
     return Math.round(size);
   }
 
