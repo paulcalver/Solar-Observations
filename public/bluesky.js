@@ -7,13 +7,12 @@
   const FETCH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
   const SEARCH_PHRASES = [
-    'the sun felt',
-    'sunshine today',
-    'the sun was so',
-    'the sun looked',
+    'sun',
+    'sunshine',
     'golden hour',
-    'the light today',
-    'sun hit different'
+    'sunset',
+    'sunrise',
+    'sunlight'
   ];
 
   // ── Curated fallback observations ─────────────────────────
@@ -63,57 +62,70 @@
 
   // ── Fetch posts from Bluesky ───────────────────────────────
   async function fetchPosts() {
-    const phrase = SEARCH_PHRASES[currentPhraseIndex];
-    currentPhraseIndex = (currentPhraseIndex + 1) % SEARCH_PHRASES.length;
+    // Try ALL search phrases to gather as many posts as possible
+    const maxAttempts = SEARCH_PHRASES.length;
+    let attempts = 0;
+    let foundAny = false;
 
-    try {
-      // Call through authenticated proxy
-      const url = `${BLUESKY_API}?q=${encodeURIComponent(phrase)}&limit=10&sort=latest&lang=en`;
+    while (attempts < maxAttempts) {
+      const phrase = SEARCH_PHRASES[currentPhraseIndex];
+      currentPhraseIndex = (currentPhraseIndex + 1) % SEARCH_PHRASES.length;
+      attempts++;
 
-      console.log(`[bluesky] Fetching: "${phrase}"`);
-
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        // API error - fall back to curated posts
-        console.warn(`[bluesky] API returned ${response.status}, using fallback`);
-        useFallbackPosts();
-        return;
+      // Add delay between requests to avoid rate limiting (except first request)
+      if (attempts > 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
       }
 
-      const data = await response.json();
+      try {
+        // Call through authenticated proxy
+        const url = `${BLUESKY_API}?q=${encodeURIComponent(phrase)}&limit=25&sort=latest&lang=en`;
 
-      if (data.posts && data.posts.length > 0) {
-        // Extract and format posts
-        const newPosts = data.posts.map(post => ({
-          text: post.record?.text || '',
-          author: post.author?.handle?.replace('.bsky.social', '') || 'unknown',
-          time: formatRelativeTime(post.record?.createdAt || new Date().toISOString())
-        })).filter(p => p.text.length > 0 && p.text.length < 200); // Filter too short/long
+        console.log(`[bluesky] Fetching: "${phrase}" (attempt ${attempts}/${maxAttempts})`);
 
-        // Combine with existing posts, deduplicate
-        const allPosts = [...posts, ...newPosts];
-        const uniquePosts = Array.from(new Map(allPosts.map(p => [p.text, p])).values());
+        const response = await fetch(url);
 
-        posts = uniquePosts.slice(0, 30); // Keep max 30 posts in rotation
-
-        if (posts.length > 0) {
-          currentIndex = 0;
-          showCurrentPost();
+        if (!response.ok) {
+          console.warn(`[bluesky] API returned ${response.status} for "${phrase}"`);
+          // Try next phrase
+          continue;
         }
 
-        console.log(`[bluesky] Loaded ${newPosts.length} posts, total: ${posts.length}`);
-      } else {
-        console.log(`[bluesky] No posts found for "${phrase}"`);
-        if (posts.length === 0) {
-          useFallbackPosts();
+        const data = await response.json();
+
+        if (data.posts && data.posts.length > 0) {
+          // Extract and format posts
+          const newPosts = data.posts.map(post => ({
+            text: post.record?.text || '',
+            author: post.author?.handle?.replace('.bsky.social', '') || 'unknown',
+            time: formatRelativeTime(post.record?.createdAt || new Date().toISOString())
+          })).filter(p => p.text.length > 0 && p.text.length < 200); // Filter too short/long
+
+          // Combine with existing posts, deduplicate
+          const allPosts = [...posts, ...newPosts];
+          const uniquePosts = Array.from(new Map(allPosts.map(p => [p.text, p])).values());
+
+          posts = uniquePosts.slice(0, 50); // Keep max 50 posts in rotation (increased from 30)
+
+          console.log(`[bluesky] Found ${newPosts.length} for "${phrase}", total: ${posts.length}`);
+          foundAny = true;
+          // Continue to next phrase to gather more posts
+        } else {
+          console.log(`[bluesky] No posts found for "${phrase}"`);
         }
+      } catch (err) {
+        console.error(`[bluesky] Fetch error for "${phrase}":`, err.message);
       }
-    } catch (err) {
-      console.error('[bluesky] Fetch error:', err.message);
-      if (posts.length === 0) {
-        useFallbackPosts();
-      }
+    }
+
+    // After trying all phrases, display results or fallback
+    if (foundAny && posts.length > 0) {
+      console.log(`[bluesky] ✓ Completed search, ${posts.length} unique posts in rotation`);
+      currentIndex = 0;
+      showCurrentPost();
+    } else {
+      console.log(`[bluesky] No posts found after trying all ${maxAttempts} phrases, using fallback`);
+      useFallbackPosts();
     }
   }
 

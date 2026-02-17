@@ -184,7 +184,8 @@ app.get('/api/bluesky/search', async (req, res) => {
   const qsIndex = fullUrl.indexOf('?');
   const rawQuery = qsIndex !== -1 ? fullUrl.substring(qsIndex) : '';
 
-  const url = `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts${rawQuery}`;
+  // Use authenticated endpoint (bsky.social) instead of public endpoint
+  const url = `https://bsky.social/xrpc/app.bsky.feed.searchPosts${rawQuery}`;
 
   console.log(`[proxy] bluesky → ${url}`);
 
