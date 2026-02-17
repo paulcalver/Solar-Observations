@@ -106,6 +106,15 @@
             if (p.text.match(/https?:\/\/|www\.|[a-z0-9-]+\.(com|org|net|io|co)/i)) return false;
             // Filter out newspaper references and news-style posts
             if (p.text.match(/sun-times|daily sun|the sun newspaper|breaking|headlines?|article|news:/i)) return false;
+            // Filter out inappropriate or off-topic content
+            if (p.text.match(/sex|dungeon|nsfw|18\+|explicit|porn|dick|fuck|shit|damn|hell(?!o)|ass(?!ume)|bitch/i)) return false;
+            // Filter out sports teams and sports content
+            if (p.text.match(/phoenix suns|gold coast suns|jacksonville suns|the suns (win|lose|beat|play|vs|defeat|scored)|suns (game|win|lose|beat|play|vs|defeat|scored)|#nba|#afl|#nfl|#mlb|#nhl|afl grand final|football|basketball|baseball|soccer/i)) return false;
+            // Filter out date references (Sunday, Sun 16th, Sun, 22 Feb, Sun, Feb 22, 2026, etc.)
+            if (p.text.match(/\bsunday\b|sun[,\s]+\d{1,2}(st|nd|rd|th)?|sun[,\s]+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}|on sun\b|this sun\b|next sun\b|last sun\b/i)) return false;
+            // Must contain sun-related words to avoid false matches
+            const hasSunWord = p.text.match(/\b(sun|sunshine|sunlight|sunset|sunrise|golden hour|solar|sunny)\b/i);
+            if (!hasSunWord) return false;
             return true;
           });
 
