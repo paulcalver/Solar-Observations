@@ -1,4 +1,4 @@
-# Solar Quotes
+# Solar Observations
 
 A web piece that overlays individuals observations about the sun — sourced live from Bluesky — onto a looping 24-hour timelapse of the solar chromosphere from NASA's Solar Dynamics Observatory.
 
