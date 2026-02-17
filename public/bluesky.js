@@ -65,7 +65,7 @@
     // Try ALL search phrases to gather as many posts as possible
     const maxAttempts = SEARCH_PHRASES.length;
     let attempts = 0;
-    let foundAny = false;
+    let hasShownFirstPost = false;
 
     while (attempts < maxAttempts) {
       const phrase = SEARCH_PHRASES[currentPhraseIndex];
@@ -108,7 +108,14 @@
           posts = uniquePosts.slice(0, 50); // Keep max 50 posts in rotation (increased from 30)
 
           console.log(`[bluesky] Found ${newPosts.length} for "${phrase}", total: ${posts.length}`);
-          foundAny = true;
+
+          // Show first post immediately when we get results
+          if (!hasShownFirstPost && posts.length > 0) {
+            console.log(`[bluesky] Showing first post, will continue gathering more...`);
+            currentIndex = 0;
+            showCurrentPost();
+            hasShownFirstPost = true;
+          }
           // Continue to next phrase to gather more posts
         } else {
           console.log(`[bluesky] No posts found for "${phrase}"`);
@@ -118,11 +125,9 @@
       }
     }
 
-    // After trying all phrases, display results or fallback
-    if (foundAny && posts.length > 0) {
+    // After trying all phrases, log final count or fallback
+    if (hasShownFirstPost) {
       console.log(`[bluesky] ✓ Completed search, ${posts.length} unique posts in rotation`);
-      currentIndex = 0;
-      showCurrentPost();
     } else {
       console.log(`[bluesky] No posts found after trying all ${maxAttempts} phrases, using fallback`);
       useFallbackPosts();
