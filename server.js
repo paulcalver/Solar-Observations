@@ -89,6 +89,8 @@ async function authenticateBluesky() {
 
 // ── Solar video generation endpoint ───────────────────────
 app.get('/api/solar-video', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+
   // Check cache first
   if (videoCache.url && videoCache.timestamp) {
     const age = Date.now() - videoCache.timestamp;
@@ -108,24 +110,27 @@ app.get('/api/solar-video', async (req, res) => {
 
     const formatISO = d => d.toISOString().replace('.000Z', 'Z');
 
-    // Queue movie request
-    const queueParams = new URLSearchParams({
-      startTime: formatISO(startTime),
-      endTime: formatISO(endTime),
-      layers: '[13,1,100]',
-      imageScale: 1.21,
-      width: 2160,
-      height: 2160,
-      format: 'mp4',
-      frameRate: 15,
-      cadence: 120,
-      maxFrames: 720
-    });
-
-    const queueUrl = `https://api.helioviewer.org/v2/queueMovie/?${queueParams}`;
+    // Queue movie request (URL built manually to preserve brackets in layers param)
+    const queueUrl = `https://api.helioviewer.org/v2/queueMovie/?` +
+      `startTime=${formatISO(startTime)}` +
+      `&endTime=${formatISO(endTime)}` +
+      `&layers=[13,1,100]` +
+      `&events=` +
+      `&eventsLabels=false` +
+      `&imageScale=2.42` +
+      `&x0=0&y0=0&x1=-1306.8&y1=-1306.8&x2=1306.8&y2=1306.8` +
+      `&width=1080` +
+      `&height=1080` +
+      `&format=mp4` +
+      `&frameRate=15` +
+      `&cadence=120` +
+      `&maxFrames=720`;
     console.log('[solar] Queueing movie...');
 
     const queueResponse = await fetch(queueUrl);
+    if (!queueResponse.ok) {
+      throw new Error(`Helioviewer queue error: ${queueResponse.status}`);
+    }
     const queueData = await queueResponse.json();
 
     if (!queueData.id) {
@@ -145,11 +150,15 @@ app.get('/api/solar-video', async (req, res) => {
       await new Promise(resolve => setTimeout(resolve, pollInterval));
       polls++;
 
-      const statusUrl = `https://api.helioviewer.org/v2/getMovieStatus/?id=${movieId}&format=mp4&verbose=true&callback=false`;
+      const statusUrl = `https://api.helioviewer.org/v2/getMovieStatus/?id=${movieId}&format=mp4&verbose=true`;
       const statusResponse = await fetch(statusUrl);
+      if (!statusResponse.ok) {
+        console.warn(`[solar] Poll error: ${statusResponse.status}`);
+        continue;
+      }
       const statusData = await statusResponse.json();
 
-      console.log(`[solar] Poll ${polls}/${maxPolls}: ${statusData.status} (${statusData.percent}%)`);
+      console.log(`[solar] Poll ${polls}/${maxPolls}: ${statusData.statusLabel} (${Math.round((statusData.progress || 0) * 100)}%)`);
 
       if (statusData.status === 2) {
         // Complete

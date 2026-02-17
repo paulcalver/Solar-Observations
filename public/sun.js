@@ -52,8 +52,10 @@
 
   // ── Sizing ─────────────────────────────────────────────────
   function getVideoSize() {
+    // Sun disk fills ~75% of the video frame (810/1080).
+    // Scale container so the disk edge aligns with the viewport edge.
     const minDim = Math.min(window.innerWidth, window.innerHeight);
-    const size = minDim * 2;
+    const size = minDim * (1080 / 580);
     return Math.round(size);
   }
 
@@ -137,11 +139,17 @@
     try {
       // Call server endpoint (handles caching server-side)
       statusTextEl.textContent = 'Requesting solar video...';
-      const response = await fetch('/api/solar-video');
+      const response = await fetch('/api/solar-video', {
+        cache: 'no-store'
+      });
 
       if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.error || `Server error: ${response.status}`);
+        let errMsg = `Server error: ${response.status}`;
+        try {
+          const errData = await response.json();
+          if (errData.error) errMsg = errData.error;
+        } catch (_) { /* response wasn't JSON */ }
+        throw new Error(errMsg);
       }
 
       const data = await response.json();
