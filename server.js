@@ -14,6 +14,20 @@ let videoCache = {
   expiresIn: 6 * 60 * 60 * 1000 // 6 hours
 };
 
+// ── Solar generation progress (shared across requests) ────
+let solarProgress = {
+  active: false,
+  progress: 0,
+  framesProcessed: 0,
+  numFrames: 720,
+  statusLabel: ''
+};
+
+// ── Solar progress endpoint ───────────────────────────────
+app.get('/api/solar-progress', (req, res) => {
+  res.json(solarProgress);
+});
+
 // ── Proxy endpoint for Helioviewer API ───────────────────────
 // Declared BEFORE static files so it takes priority.
 // Uses raw query string to preserve bracket characters
@@ -146,6 +160,8 @@ app.get('/api/solar-video', async (req, res) => {
     let polls = 0;
     let videoUrl = null;
 
+    solarProgress = { active: true, progress: 0, framesProcessed: 0, numFrames: 720, statusLabel: 'Queued' };
+
     while (polls < maxPolls) {
       await new Promise(resolve => setTimeout(resolve, pollInterval));
       polls++;
@@ -158,7 +174,17 @@ app.get('/api/solar-video', async (req, res) => {
       }
       const statusData = await statusResponse.json();
 
-      console.log(`[solar] Poll ${polls}/${maxPolls}: ${statusData.statusLabel} (${Math.round((statusData.progress || 0) * 100)}%)`);
+      const progress = statusData.progress || 0;
+      const numFrames = statusData.numFrames || 720;
+      solarProgress = {
+        active: true,
+        progress,
+        framesProcessed: statusData.framesProcessed ?? Math.round(progress * numFrames),
+        numFrames,
+        statusLabel: statusData.statusLabel || ''
+      };
+
+      console.log(`[solar] Poll ${polls}/${maxPolls}: ${statusData.statusLabel} (${Math.round(progress * 100)}%)`);
 
       if (statusData.status === 2) {
         // Complete
@@ -169,6 +195,8 @@ app.get('/api/solar-video', async (req, res) => {
         throw new Error(statusData.error || 'Movie generation failed');
       }
     }
+
+    solarProgress = { active: false, progress: 1, framesProcessed: 0, numFrames: 0, statusLabel: '' };
 
     if (!videoUrl) {
       throw new Error('Movie generation timed out');

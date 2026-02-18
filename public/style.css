@@ -63,6 +63,16 @@ body {
   text-transform: uppercase;
 }
 
+#frame-counter {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  font-weight: 300;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  opacity: 0.6;
+  min-height: 1em;
+}
+
 .spinner {
   width: 28px;
   height: 28px;

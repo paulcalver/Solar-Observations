@@ -30,6 +30,7 @@
   // ── State ──────────────────────────────────────────────────
   const currentSourceId = 13; // 304 Å wavelength
   let isLoading = false;
+  let progressPollInterval = null;
 
   // ── Cache helpers ──────────────────────────────────────────
   function getCacheKey(sourceId, date) {
@@ -134,8 +135,10 @@
     statusOverlay.innerHTML = `
       <div class="spinner"></div>
       <div id="status-text">Requesting solar data...</div>
+      <div id="frame-counter"></div>
     `;
     const statusTextEl = document.getElementById('status-text');
+    const frameCounterEl = document.getElementById('frame-counter');
     videoContainer.style.display = 'none';
     infoBar.classList.remove('visible');
 
@@ -163,6 +166,17 @@
         msgIndex = (msgIndex + 1) % LOADING_MESSAGES.length;
         statusTextEl.textContent = LOADING_MESSAGES[msgIndex];
       }, 3500);
+
+      // Poll server for frame-level progress
+      progressPollInterval = setInterval(async () => {
+        try {
+          const r = await fetch('/api/solar-progress');
+          const d = await r.json();
+          if (d.active && d.numFrames > 0) {
+            frameCounterEl.textContent = `${d.framesProcessed} / ${d.numFrames} frames`;
+          }
+        } catch { /* ignore */ }
+      }, 2000);
 
       const response = await fetch('/api/solar-video', {
         cache: 'no-store'
@@ -196,12 +210,14 @@
 
       // Load and play the video
       if (loadingMsgInterval) clearInterval(loadingMsgInterval);
+      if (progressPollInterval) clearInterval(progressPollInterval);
       statusTextEl.textContent = 'Loading video...';
       await loadVideo(secureUrl);
 
     } catch (err) {
       console.error('Solar movie error:', err);
       if (loadingMsgInterval) clearInterval(loadingMsgInterval);
+      if (progressPollInterval) clearInterval(progressPollInterval);
       statusOverlay.innerHTML = `
         <div id="error-msg">
           Could not load solar data.<br><br>
