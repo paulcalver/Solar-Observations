@@ -302,8 +302,13 @@ app.get('/api/bluesky/search', async (req, res) => {
       const body = await response.text();
       console.log(`[proxy] Bluesky error response: ${body.substring(0, 300)}`);
 
-      // If 401 (unauthorized), try to re-authenticate
-      if (response.status === 401) {
+      // Bluesky returns 400 for ExpiredToken and 401 for InvalidToken
+      let isAuthError = response.status === 401;
+      if (!isAuthError) {
+        try { isAuthError = JSON.parse(body).error === 'ExpiredToken'; } catch {}
+      }
+
+      if (isAuthError) {
         console.log('[bluesky] Token expired, re-authenticating...');
         blueskyAccessToken = await authenticateBluesky();
 
@@ -340,4 +345,10 @@ app.listen(PORT, async () => {
   loadCacheFromDisk();
   scheduleDailyRefresh();
   blueskyAccessToken = await authenticateBluesky();
+
+  // Bluesky access tokens expire after ~2 hours — refresh every 90 minutes
+  setInterval(async () => {
+    console.log('[bluesky] Proactive token refresh...');
+    blueskyAccessToken = await authenticateBluesky();
+  }, 90 * 60 * 1000);
 });
