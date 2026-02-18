@@ -30,3 +30,4 @@ yarn-error.log*
 # Optional: Cache/temp files
 *.cache
 .temp/
+solar-cache.json
