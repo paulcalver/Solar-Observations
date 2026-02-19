@@ -14,8 +14,7 @@
     'Queuing video from Helioviewer...',
     'Rendering 24 hours of solar activity...',
     'Processing ultraviolet imagery...',
-    'Compositing chromosphere frames...',
-    'Almost there...'
+    'Compositing chromosphere frames...'
   ];
   let loadingMsgInterval = null;
 
