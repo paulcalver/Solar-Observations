@@ -233,6 +233,22 @@
     }
   }
 
+  // ── Reload / reset ─────────────────────────────────────────
+  async function reloadSun() {
+    // Clear client-side cache for today
+    const key = getCacheKey(currentSourceId, endTime);
+    localStorage.removeItem(key);
+    // Clear server-side cache (memory + disk)
+    try { await fetch('/api/solar-reset'); } catch { /* ignore */ }
+    // Reset state and reload
+    isLoading = false;
+    loadSolarMovie();
+  }
+
+  window.reloadSun = reloadSun;
+
+  console.log('[solar] Run reloadSun() in the console to force-reload the video');
+
   // ── Start ──────────────────────────────────────────────────
   loadSolarMovie();
 

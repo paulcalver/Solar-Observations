@@ -230,6 +230,19 @@ function scheduleDailyRefresh() {
   }, ms);
 }
 
+// ── Reset cache endpoint (clears cache without regenerating) ──
+// Trigger with: GET /api/solar-reset (or reloadSun() in the browser console)
+app.get('/api/solar-reset', (_req, res) => {
+  videoCache = { url: null, timestamp: null };
+  try {
+    if (fs.existsSync(CACHE_FILE)) fs.unlinkSync(CACHE_FILE);
+  } catch (err) {
+    console.warn('[solar] Could not delete disk cache:', err.message);
+  }
+  console.log('[solar] Cache cleared — next request will generate a fresh video');
+  res.json({ ok: true });
+});
+
 // ── Manual refresh endpoint (for external cron services) ──
 // Trigger with: GET /api/refresh?token=YOUR_REFRESH_TOKEN
 app.get('/api/refresh', async (req, res) => {
