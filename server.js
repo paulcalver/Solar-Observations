@@ -118,7 +118,7 @@ class SemanticFilter {
       this.instance = await pipeline(
         'zero-shot-classification',
         'Xenova/mobilebert-uncased-mnli',
-        { dtype: 'q8' }
+        { dtype: { model: 'q8' } }
       );
       console.log('[filter] ✓ Semantic filter model loaded');
     }
