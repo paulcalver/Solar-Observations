@@ -94,6 +94,72 @@ app.get('/api/helioviewer/:endpoint', async (req, res) => {
   }
 });
 
+// ── Semantic filter ────────────────────────────────────────
+const CANDIDATE_LABELS = [
+  'personal sensory experience of the physical sun or sunlight',
+  'news media politics or current events',
+  'product brand company or technology',
+  'metaphor idiom or figurative language not about actual sunlight',
+  'spam advertisement or self-promotion'
+];
+
+// Pre-screen: text must reference the sun before we bother running the classifier
+const SUN_WORDS = /\b(sun|sunshine|sunlight|sunset|sunrise|solar|sunny|sunbeam|sunray|sun-?lit|golden hour|dawn|dusk|rays? of (sun)?light)\b/i;
+
+// Hard safety block — things the semantic model won't reliably catch
+const SAFETY_REGEX = /\b(sex|nsfw|18\+|explicit|porn|dick|cock|fuck|shit|bitch|racist|racism|antisemitic|islamophob|xenophob|homophob|transphob|bigot|nazi|kkk|white supremac)\b/i;
+
+class SemanticFilter {
+  static instance = null;
+
+  static async getInstance() {
+    if (this.instance === null) {
+      const { pipeline } = await import('@huggingface/transformers');
+      this.instance = await pipeline(
+        'zero-shot-classification',
+        'Xenova/mobilebert-uncased-mnli'
+      );
+      console.log('[filter] ✓ Semantic filter model loaded');
+    }
+    return this.instance;
+  }
+}
+
+async function filterPosts(posts) {
+  let classifier;
+  try {
+    classifier = await SemanticFilter.getInstance();
+  } catch (err) {
+    console.error('[filter] Model unavailable, returning unfiltered posts:', err.message);
+    return posts;
+  }
+
+  const filtered = [];
+
+  for (const post of posts) {
+    const text = post.record?.text;
+    if (!text || text.length < 10) continue;
+    if (!SUN_WORDS.test(text)) continue;
+    if ((text.match(/#/g) || []).length > 1) continue;
+    if (/https?:\/\//i.test(text)) continue;
+    if (SAFETY_REGEX.test(text)) continue;
+
+    try {
+      const result = await classifier(text, CANDIDATE_LABELS);
+      const topLabel = result.labels[0];
+      const topScore = result.scores[0];
+
+      if (topLabel === CANDIDATE_LABELS[0] && topScore > 0.4) {
+        filtered.push({ ...post, _relevanceScore: topScore });
+      }
+    } catch (err) {
+      console.error('[filter] Classification error:', err.message);
+    }
+  }
+
+  return filtered.sort((a, b) => b._relevanceScore - a._relevanceScore);
+}
+
 // ── Authenticate with Bluesky ─────────────────────────────
 async function authenticateBluesky() {
   const identifier = process.env.BLUESKY_IDENTIFIER;
@@ -281,70 +347,75 @@ app.get('/api/solar-video', async (req, res) => {
   }
 });
 
-// ── Proxy endpoint for Bluesky API ────────────────────────────
-app.get('/api/bluesky/search', async (req, res) => {
-  const fullUrl = req.originalUrl;
-  const qsIndex = fullUrl.indexOf('?');
-  const rawQuery = qsIndex !== -1 ? fullUrl.substring(qsIndex) : '';
+// ── Filtered Bluesky feed endpoint ────────────────────────
+const BLUESKY_SEARCH_PHRASES = [
+  'the sun felt', 'the sun looked', 'sunlight on', 'watching the sunset',
+  'sunrise this morning', 'sun on my', 'beams of light', 'sunshine was',
+  'beautiful sun', 'the light today', 'the sky was', 'warm glow',
+  'light through', 'the sun was so', 'rays of sun', 'sunset tonight',
+  'morning light', 'golden hour', 'sun hitting'
+];
 
-  // Use authenticated endpoint (bsky.social) instead of public endpoint
-  const url = `https://bsky.social/xrpc/app.bsky.feed.searchPosts${rawQuery}`;
+async function fetchBlueskyPosts() {
+  let allPosts = [];
 
-  console.log(`[proxy] bluesky → ${url}`);
+  for (const phrase of BLUESKY_SEARCH_PHRASES) {
+    try {
+      const url = `https://bsky.social/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(phrase)}&limit=10&sort=latest&lang=en`;
+      const headers = { 'Accept': 'application/json' };
+      if (blueskyAccessToken) headers['Authorization'] = `Bearer ${blueskyAccessToken}`;
 
-  try {
-    const headers = {
-      'Accept': 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Cache-Control': 'no-cache',
-      'Pragma': 'no-cache'
-    };
+      const response = await fetch(url, { headers });
 
-    // Add authorization if we have a token
-    if (blueskyAccessToken) {
-      headers['Authorization'] = `Bearer ${blueskyAccessToken}`;
-    }
-
-    const response = await fetch(url, { headers });
-
-    console.log(`[proxy] Bluesky status: ${response.status}`);
-
-    if (!response.ok) {
-      const body = await response.text();
-      console.log(`[proxy] Bluesky error response: ${body.substring(0, 300)}`);
-
-      // Bluesky returns 400 for ExpiredToken and 401 for InvalidToken
-      let isAuthError = response.status === 401;
-      if (!isAuthError) {
-        try { isAuthError = JSON.parse(body).error === 'ExpiredToken'; } catch {}
-      }
-
-      if (isAuthError) {
-        console.log('[bluesky] Token expired, re-authenticating...');
-        blueskyAccessToken = await authenticateBluesky();
-
-        // Retry request with new token
-        if (blueskyAccessToken) {
-          headers['Authorization'] = `Bearer ${blueskyAccessToken}`;
-          const retryResponse = await fetch(url, { headers });
-          const retryData = await retryResponse.json();
-          return res.json(retryData);
+      if (!response.ok) {
+        const body = await response.text();
+        let isAuthError = response.status === 401;
+        if (!isAuthError) {
+          try { isAuthError = JSON.parse(body).error === 'ExpiredToken'; } catch {}
         }
+        if (isAuthError) {
+          console.log('[bluesky] Token expired during fetch, re-authenticating...');
+          blueskyAccessToken = await authenticateBluesky();
+          if (blueskyAccessToken) {
+            headers['Authorization'] = `Bearer ${blueskyAccessToken}`;
+            const retry = await fetch(url, { headers });
+            if (retry.ok) {
+              const retryData = await retry.json();
+              if (retryData.posts) allPosts.push(...retryData.posts);
+            }
+          }
+        }
+        continue;
       }
 
-      // Return empty result instead of error - let client handle fallback
-      console.log('[bluesky] API error, returning empty result for fallback');
-      return res.json({ posts: [] });
+      const data = await response.json();
+      if (data.posts) allPosts.push(...data.posts);
+    } catch (err) {
+      console.error(`[bluesky] Query failed: "${phrase}"`, err.message);
     }
+  }
 
-    const data = await response.json();
-    res.json(data);
+  // Deduplicate by URI
+  const seen = new Set();
+  return allPosts.filter(p => {
+    if (seen.has(p.uri)) return false;
+    seen.add(p.uri);
+    return true;
+  });
+}
+
+app.get('/api/bluesky/filtered', async (_req, res) => {
+  try {
+    const allPosts = await fetchBlueskyPosts();
+    console.log(`[filter] Fetched ${allPosts.length} posts, running semantic filter...`);
+
+    const filtered = await filterPosts(allPosts);
+    console.log(`[filter] ✓ ${filtered.length}/${allPosts.length} posts passed filter`);
+
+    res.json({ posts: filtered });
   } catch (err) {
-    console.error('[proxy] Bluesky error:', err.message);
-    // Return empty result for fallback instead of 500 error
-    res.json({ posts: [] });
+    console.error('[filter] Filtered feed error:', err);
+    res.status(500).json({ error: 'Failed to fetch filtered feed' });
   }
 });
 
@@ -358,6 +429,9 @@ app.listen(PORT, async () => {
   loadCacheFromDisk();
   scheduleDailyRefresh();
   blueskyAccessToken = await authenticateBluesky();
+  SemanticFilter.getInstance().catch(err =>
+    console.error('[filter] Model pre-load failed:', err.message)
+  );
 
   // Bluesky access tokens expire after ~2 hours — refresh every 90 minutes
   setInterval(async () => {
