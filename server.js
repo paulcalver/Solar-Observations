@@ -404,13 +404,33 @@ async function fetchBlueskyPosts() {
   });
 }
 
+function preScreenPosts(posts) {
+  return posts.filter(post => {
+    const text = post.record?.text;
+    if (!text || text.length < 10) return false;
+    if (!SUN_WORDS.test(text)) return false;
+    if ((text.match(/#/g) || []).length > 1) return false;
+    if (/https?:\/\//i.test(text)) return false;
+    if (SAFETY_REGEX.test(text)) return false;
+    return true;
+  });
+}
+
 app.get('/api/bluesky/filtered', async (_req, res) => {
   try {
     const allPosts = await fetchBlueskyPosts();
-    console.log(`[filter] Fetched ${allPosts.length} posts, running semantic filter...`);
+    console.log(`[filter] Fetched ${allPosts.length} posts`);
 
-    const filtered = await filterPosts(allPosts);
-    console.log(`[filter] ✓ ${filtered.length}/${allPosts.length} posts passed filter`);
+    let filtered;
+    if (SemanticFilter.instance !== null) {
+      // Model already loaded — run full semantic filter
+      filtered = await filterPosts(allPosts);
+      console.log(`[filter] ✓ ${filtered.length}/${allPosts.length} posts passed semantic filter`);
+    } else {
+      // Model still loading — apply pre-screens only so the response is immediate
+      filtered = preScreenPosts(allPosts);
+      console.log(`[filter] Model not ready, returning ${filtered.length} pre-screened posts`);
+    }
 
     res.json({ posts: filtered });
   } catch (err) {
