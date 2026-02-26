@@ -281,6 +281,258 @@ app.get('/api/solar-video', async (req, res) => {
   }
 });
 
+// ── Bluesky: search phrases ────────────────────────────────
+const SEARCH_PHRASES = [
+  'the sun felt',
+  'the sun looked',
+  'sunlight on',
+  'watching the sunset',
+  'sunrise this morning',
+  'sun on my',
+  'beams of light',
+  'sunshine was',
+  'beautiful sun',
+  'the light today',
+  'the sky was',
+  'warm glow',
+  'light through',
+  'the sun was so',
+  'rays of sun',
+  'sunset tonight',
+  'morning light',
+  'golden hour',
+  'sun hitting'
+];
+
+// ── Bluesky: fetch posts for one phrase ───────────────────
+async function fetchPhrase(phrase) {
+  const url = `https://bsky.social/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(phrase)}&limit=50&sort=latest&lang=en`;
+  const headers = {
+    'Accept': 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Cache-Control': 'no-cache'
+  };
+  if (blueskyAccessToken) headers['Authorization'] = `Bearer ${blueskyAccessToken}`;
+
+  const response = await fetch(url, { headers });
+
+  if (!response.ok) {
+    const body = await response.text();
+    // Handle expired/invalid token
+    let isAuthError = response.status === 401;
+    if (!isAuthError) {
+      try { isAuthError = JSON.parse(body).error === 'ExpiredToken'; } catch {}
+    }
+    if (isAuthError) {
+      blueskyAccessToken = await authenticateBluesky();
+      if (blueskyAccessToken) {
+        headers['Authorization'] = `Bearer ${blueskyAccessToken}`;
+        const retry = await fetch(url, { headers });
+        if (retry.ok) return (await retry.json()).posts || [];
+      }
+    }
+    return [];
+  }
+
+  const data = await response.json();
+  return data.posts || [];
+}
+
+// ── Bluesky: pre-screen with fast regex ───────────────────
+function preScreenPosts(rawPosts) {
+  const seen = new Set();
+  const results = [];
+
+  for (const post of rawPosts) {
+    const text = post.record?.text || '';
+    if (!text || text.length === 0 || text.length > 280) continue;
+    if (seen.has(text)) continue;
+    seen.add(text);
+
+    // Must contain a sun-related word
+    if (!/\b(sun|sunshine|sunlight|sunset|sunrise|golden hour|solar|sunny)\b/i.test(text)) continue;
+    // No URLs
+    if (/https?:\/\/|www\.|[a-z0-9-]+\.(com|org|net|io|co)/i.test(text)) continue;
+    // Max one hashtag
+    if ((text.match(/#/g) || []).length > 1) continue;
+    // No newspaper / news-style content
+    if (/sun-times|daily sun|the sun newspaper|telegraph|the sun (reports?|says?|published|wrote|exclusive|revealed|claims?)|in the sun|on the sun|from the sun|breaking|headlines?|article|news:/i.test(text)) continue;
+    // No sports
+    if (/phoenix suns|gold coast suns|jacksonville suns|the suns (win|lose|beat|play|vs|defeat|scored)|suns (game|win|lose|beat|play|vs|defeat|scored)|#nba|#afl|#nfl|#mlb|#nhl|afl grand final|football|basketball|baseball|soccer/i.test(text)) continue;
+    // No date references (Sunday, Sun 16th, etc.)
+    if (/\bsunday\b|sun[,\s]+\d{1,2}(st|nd|rd|th)?|sun[,\s]+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|on sun\b|this sun\b|next sun\b|last sun\b/i.test(text)) continue;
+    // No explicit / offensive content
+    if (/sex|dungeon|nsfw|18\+|explicit|porn|dick|cock|cumshot|fuck|shit|damn|hell(?!o)|ass(?!ume)|bitch/i.test(text)) continue;
+    // No hate speech
+    if (/racist|propaganda|racism|antisemitic|antisemitism|islamophob|xenophob|homophob|transphob|bigot|nazi|kkk|white supremac/i.test(text)) continue;
+    // No emoji
+    if (/\p{Emoji_Presentation}|\p{Extended_Pictographic}/u.test(text)) continue;
+    // No birthday
+    if (/birthday/i.test(text)) continue;
+    // No photography hashtags or VRChat
+    if (/#photograph|#photo\b|#vrc|vrchat/i.test(text)) continue;
+
+    results.push({
+      text,
+      author: post.author?.handle?.replace('.bsky.social', '') || 'unknown',
+      time: post.record?.createdAt || new Date().toISOString()
+    });
+  }
+
+  return results;
+}
+
+// ── Gemini: semantic filter ────────────────────────────────
+async function geminiFilter(posts) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.warn('[gemini] No API key — skipping semantic filter');
+    return posts;
+  }
+
+  if (posts.length === 0) return posts;
+
+  const numbered = posts.map((p, i) => `${i + 1}. ${p.text}`).join('\n');
+
+  const prompt = `You are filtering social media posts for an art installation that displays poetic, sensory observations about the physical sun and sunlight.
+
+Keep a post ONLY if it is a genuine first-person or observational account of:
+- The physical sun in the sky (its appearance, warmth, light, colour)
+- Sunrise or sunset as a natural phenomenon
+- The quality of sunlight (soft, bright, golden, harsh, gentle, etc.)
+- The feeling of sunlight on the body or surroundings
+
+Reject posts that are:
+- About newspapers, media outlets, or news stories
+- Sports references (teams, games, scores)
+- Metaphors or idioms where "sun" doesn't refer to the actual sun
+- Promotional, commercial, or spam content
+- Philosophical or political commentary that uses the sun as a symbol only
+- Birthday or celebration mentions
+- Vague or unrelated to direct solar/sunlight experience
+
+Posts:
+${numbered}
+
+Reply with ONLY a JSON array of the numbers to KEEP, e.g. [1, 3, 7]. No explanation.`;
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+    console.log(`[gemini] Calling API (gemini-2.5-flash) with ${posts.length} posts (key: ${apiKey.substring(0, 8)}...)`);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0, maxOutputTokens: 1024, thinkingConfig: { thinkingBudget: 0 } }
+      })
+    });
+
+    console.log(`[gemini] Response status: ${response.status}`);
+
+    if (!response.ok) {
+      const err = await response.text();
+      if (response.status === 429) {
+        console.warn(`[gemini] ⚠️  Quota exceeded (429 TooManyRequests) — falling back to pre-screened posts\n[gemini] Detail: ${err}`);
+      } else {
+        console.warn(`[gemini] API error ${response.status}: ${err}`);
+      }
+      return posts; // fallback
+    }
+
+    const data = await response.json();
+    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    console.log(`[gemini] Raw response: ${raw.trim()}`);
+
+    // Extract JSON array from response
+    const match = raw.match(/\[[\d,\s]+\]/);
+    if (!match) {
+      console.warn('[gemini] Could not parse response, keeping all pre-screened posts');
+      return posts;
+    }
+
+    const keepIndices = new Set(JSON.parse(match[0]).map(n => n - 1)); // convert to 0-based
+    const filtered = posts.filter((_, i) => keepIndices.has(i));
+    console.log(`[gemini] ✓ Filtering complete — kept ${filtered.length}/${posts.length} posts`);
+    return filtered;
+  } catch (err) {
+    console.error('[gemini] Error:', err.message);
+    return posts; // fallback
+  }
+}
+
+// ── Filtered posts cache (avoids hammering Gemini) ────────
+const POSTS_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+let postsCache = { posts: null, timestamp: null };
+
+// ── Filtered Bluesky endpoint ──────────────────────────────
+// Fetches all phrases in parallel, pre-screens with regex,
+// then uses Gemini to semantically filter before returning.
+// Results are cached for 10 minutes to avoid Gemini rate limits.
+app.get('/api/bluesky/filtered', async (_req, res) => {
+  // Return cached result if fresh
+  if (postsCache.posts && postsCache.timestamp && (Date.now() - postsCache.timestamp) < POSTS_CACHE_TTL) {
+    const age = Math.floor((Date.now() - postsCache.timestamp) / 1000);
+    console.log(`[bluesky] Cache hit (age: ${age}s), returning ${postsCache.posts.length} posts`);
+    return res.json({ posts: postsCache.posts });
+  }
+
+  console.log('[bluesky] /api/bluesky/filtered — fetching all phrases in parallel...');
+
+  try {
+    // Fetch all phrases in parallel
+    const results = await Promise.allSettled(
+      SEARCH_PHRASES.map(phrase => fetchPhrase(phrase))
+    );
+
+    // Flatten successful results
+    const allRaw = results.flatMap(r => r.status === 'fulfilled' ? r.value : []);
+    console.log(`[bluesky] ${allRaw.length} raw posts from ${SEARCH_PHRASES.length} phrases`);
+
+    // Pre-screen with regex (fast, removes obvious junk)
+    const preScreened = preScreenPosts(allRaw);
+    console.log(`[bluesky] ${preScreened.length} posts after pre-screen`);
+
+    // Shuffle and cap before sending to Gemini (to stay within token limits)
+    const shuffled = preScreened.sort(() => Math.random() - 0.5).slice(0, 80);
+
+    // Semantic filter with Gemini
+    const filtered = await geminiFilter(shuffled);
+
+    // Format relative time for client
+    const now = Date.now();
+    const formatted = filtered.map(p => {
+      const then = new Date(p.time).getTime();
+      const diffMs = now - then;
+      const diffMins = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMins / 60);
+      const diffDays = Math.floor(diffHours / 24);
+      let timeStr;
+      if (diffMins < 1) timeStr = 'just now';
+      else if (diffMins < 60) timeStr = `${diffMins}m ago`;
+      else if (diffHours < 24) timeStr = `${diffHours}h ago`;
+      else timeStr = `${diffDays}d ago`;
+
+      return { text: p.text, author: p.author, time: timeStr };
+    });
+
+    // Store in cache
+    postsCache = { posts: formatted, timestamp: Date.now() };
+
+    console.log(`[bluesky] Returning ${formatted.length} filtered posts (cached for ${POSTS_CACHE_TTL / 60000} min)`);
+    res.json({ posts: formatted });
+  } catch (err) {
+    console.error('[bluesky] /api/bluesky/filtered error:', err.message);
+    // Return stale cache if available, otherwise empty
+    if (postsCache.posts) {
+      console.log('[bluesky] Returning stale cache after error');
+      return res.json({ posts: postsCache.posts });
+    }
+    res.json({ posts: [] });
+  }
+});
+
 // ── Proxy endpoint for Bluesky API ────────────────────────────
 app.get('/api/bluesky/search', async (req, res) => {
   const fullUrl = req.originalUrl;
