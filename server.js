@@ -403,9 +403,12 @@ app.get('/api/bluesky/filtered', async (_req, res) => {
 
     let filtered;
     if (SemanticFilter.instance !== null) {
-      // Model already loaded — run full semantic filter
-      filtered = await filterPosts(allPosts);
-      console.log(`[filter] ✓ ${filtered.length}/${allPosts.length} posts passed semantic filter`);
+      // Pre-screen first, then cap before the slow per-post classifier
+      const prescreened = preScreenPosts(allPosts);
+      // Shuffle so the cap draws from all phrases, not just the first few
+      const toClassify = prescreened.sort(() => Math.random() - 0.5).slice(0, 50);
+      filtered = await filterPosts(toClassify);
+      console.log(`[filter] ✓ ${filtered.length}/${toClassify.length} posts passed semantic filter`);
     } else {
       // Model still loading — apply pre-screens only so the response is immediate
       filtered = preScreenPosts(allPosts);
