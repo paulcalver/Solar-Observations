@@ -117,7 +117,8 @@ class SemanticFilter {
       const { pipeline } = await import('@huggingface/transformers');
       this.instance = await pipeline(
         'zero-shot-classification',
-        'Xenova/mobilebert-uncased-mnli'
+        'Xenova/mobilebert-uncased-mnli',
+        { dtype: 'q8' }
       );
       console.log('[filter] ✓ Semantic filter model loaded');
     }
