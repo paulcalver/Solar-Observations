@@ -118,7 +118,7 @@ class SemanticFilter {
       this.instance = await pipeline(
         'zero-shot-classification',
         'Xenova/mobilebert-uncased-mnli',
-        { dtype: { model: 'q8' } }
+        { dtype: 'fp32' }
       );
       console.log('[filter] ✓ Semantic filter model loaded');
     }
@@ -358,43 +358,22 @@ const BLUESKY_SEARCH_PHRASES = [
 ];
 
 async function fetchBlueskyPosts() {
-  let allPosts = [];
-
-  for (const phrase of BLUESKY_SEARCH_PHRASES) {
-    try {
+  // Fetch all phrases in parallel — sequential was taking 20-38s on slow hosts
+  const results = await Promise.allSettled(
+    BLUESKY_SEARCH_PHRASES.map(async phrase => {
       const url = `https://bsky.social/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(phrase)}&limit=10&sort=latest&lang=en`;
       const headers = { 'Accept': 'application/json' };
       if (blueskyAccessToken) headers['Authorization'] = `Bearer ${blueskyAccessToken}`;
-
       const response = await fetch(url, { headers });
-
-      if (!response.ok) {
-        const body = await response.text();
-        let isAuthError = response.status === 401;
-        if (!isAuthError) {
-          try { isAuthError = JSON.parse(body).error === 'ExpiredToken'; } catch {}
-        }
-        if (isAuthError) {
-          console.log('[bluesky] Token expired during fetch, re-authenticating...');
-          blueskyAccessToken = await authenticateBluesky();
-          if (blueskyAccessToken) {
-            headers['Authorization'] = `Bearer ${blueskyAccessToken}`;
-            const retry = await fetch(url, { headers });
-            if (retry.ok) {
-              const retryData = await retry.json();
-              if (retryData.posts) allPosts.push(...retryData.posts);
-            }
-          }
-        }
-        continue;
-      }
-
+      if (!response.ok) return [];
       const data = await response.json();
-      if (data.posts) allPosts.push(...data.posts);
-    } catch (err) {
-      console.error(`[bluesky] Query failed: "${phrase}"`, err.message);
-    }
-  }
+      return data.posts || [];
+    })
+  );
+
+  const allPosts = results
+    .filter(r => r.status === 'fulfilled')
+    .flatMap(r => r.value);
 
   // Deduplicate by URI
   const seen = new Set();
