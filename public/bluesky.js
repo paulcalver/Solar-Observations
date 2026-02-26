@@ -131,12 +131,14 @@
             if (p.text.match(/sun-times|daily sun|the sun newspaper|telegraph|the sun (reports?|says?|published|wrote|exclusive|revealed|claims?)|in the sun|on the sun|from the sun|breaking|headlines?|article|news:/i)) return false;
             // Filter out birthday references
             if (p.text.match(/birthday/i)) return false;
+            // Filter out posts with more than one hashtag
+            if ((p.text.match(/#/g) || []).length > 1) return false;
             // Filter out photography hashtags and VRChat
             if (p.text.match(/#photograph|#photo\b|#vrc|vrchat/i)) return false;
             // Filter out posts containing emoji
             if (/\p{Emoji_Presentation}|\p{Extended_Pictographic}/u.test(p.text)) return false;
             // Filter out inappropriate or off-topic content
-            if (p.text.match(/sex|dungeon|nsfw|18\+|explicit|porn|dick|fuck|shit|damn|hell(?!o)|ass(?!ume)|bitch/i)) return false;
+            if (p.text.match(/sex|dungeon|nsfw|18\+|explicit|porn|dick|cock|cumshot|fuck|shit|damn|hell(?!o)|ass(?!ume)|bitch/i)) return false;
             // Filter out hate speech and discriminatory content
             if (p.text.match(/racist|propaganda|racism|antisemitic|antisemitism|islamophob|xenophob|homophob|transphob|bigot|nazi|kkk|white supremac/i)) return false;
             // Filter out sports teams and sports content
