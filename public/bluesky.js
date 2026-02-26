@@ -81,7 +81,14 @@
     }
     try {
       console.log('[bluesky] Fetching filtered posts...');
-      const response = await fetch('/api/bluesky/filtered');
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      let response;
+      try {
+        response = await fetch('/api/bluesky/filtered', { signal: controller.signal });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       if (!response.ok) {
         console.warn(`[bluesky] API returned ${response.status}`);
@@ -112,7 +119,11 @@
         useFallbackPosts();
       }
     } catch (err) {
-      console.error('[bluesky] Fetch error:', err.message);
+      if (err.name === 'AbortError') {
+        console.warn('[bluesky] Request timed out after 30s, using fallback');
+      } else {
+        console.error('[bluesky] Fetch error:', err.message);
+      }
       useFallbackPosts();
     }
   }
