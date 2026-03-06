@@ -383,6 +383,65 @@ function preScreenPosts(rawPosts) {
   return results;
 }
 
+// ── Airtable: track already-logged posts to avoid duplicates
+const loggedTexts = new Set();
+
+// ── Airtable: log kept posts (one row per post) ───────────
+async function logToAirtable(sentPosts, keptIndices) {
+  const token = process.env.AIRTABLE_TOKEN;
+  const baseId = process.env.AIRTABLE_BASE_ID;
+  if (!token || !baseId) return;
+
+  const keptSet = new Set(keptIndices);
+  const keptPosts = sentPosts
+    .filter((_, i) => keptSet.has(i))
+    .filter(p => !loggedTexts.has(p.text));
+  if (keptPosts.length === 0) return;
+
+  const batchTime = new Date().toISOString();
+
+  // Airtable allows max 10 records per request — send in batches
+  const BATCH_SIZE = 10;
+  let logged = 0;
+
+  for (let i = 0; i < keptPosts.length; i += BATCH_SIZE) {
+    const batch = keptPosts.slice(i, i + BATCH_SIZE);
+    try {
+      const response = await fetch(`https://api.airtable.com/v0/${baseId}/GeminiLog`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          records: batch.map(p => ({
+            fields: {
+              'Batch Time': batchTime,
+              'Text': p.text,
+              'Author': p.author,
+              'Post Time': p.time,
+              'Verdict': 'kept'
+            }
+          }))
+        })
+      });
+
+      if (!response.ok) {
+        const err = await response.text();
+        console.warn(`[airtable] Log failed ${response.status}: ${err.substring(0, 200)}`);
+        break;
+      }
+      batch.forEach(p => loggedTexts.add(p.text));
+      logged += batch.length;
+    } catch (err) {
+      console.warn('[airtable] Log error:', err.message);
+      break;
+    }
+  }
+
+  if (logged > 0) console.log(`[airtable] ✓ Logged ${logged} kept posts`);
+}
+
 // ── Gemini: semantic filter ────────────────────────────────
 async function geminiFilter(posts) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -452,9 +511,14 @@ Reply with ONLY a JSON array of the numbers to KEEP, e.g. [1, 3, 7]. No explanat
       return posts;
     }
 
-    const keepIndices = new Set(JSON.parse(match[0]).map(n => n - 1)); // convert to 0-based
-    const filtered = posts.filter((_, i) => keepIndices.has(i));
+    const keptIndices = JSON.parse(match[0]).map(n => n - 1); // convert to 0-based
+    const keepSet = new Set(keptIndices);
+    const filtered = posts.filter((_, i) => keepSet.has(i));
     console.log(`[gemini] ✓ Filtering complete — kept ${filtered.length}/${posts.length} posts`);
+
+    // Log to Airtable (fire-and-forget — don't block the response)
+    logToAirtable(posts, keptIndices).catch(() => {});
+
     return filtered;
   } catch (err) {
     console.error('[gemini] Error:', err.message);
@@ -610,6 +674,15 @@ app.listen(PORT, async () => {
   loadCacheFromDisk();
   scheduleDailyRefresh();
   blueskyAccessToken = await authenticateBluesky();
+
+  // Confirm Airtable credentials are present
+  const atToken = process.env.AIRTABLE_TOKEN;
+  const atBase = process.env.AIRTABLE_BASE_ID;
+  if (atToken && atBase) {
+    console.log(`[airtable] Configured — base: ${atBase.substring(0, 6)}...${atBase.slice(-4)}, token: ${atToken.substring(0, 6)}...`);
+  } else {
+    console.warn('[airtable] No credentials — logging disabled');
+  }
 
   // Bluesky access tokens expire after ~2 hours — refresh every 90 minutes
   setInterval(async () => {
