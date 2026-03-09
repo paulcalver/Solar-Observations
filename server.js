@@ -8,6 +8,7 @@ const PORT = process.env.PORT || 3000;
 // ── Bluesky authentication state ──────────────────────────
 let blueskyAccessToken = null;
 
+
 // ── Solar video cache ─────────────────────────────────────
 const CACHE_FILE = path.join(__dirname, 'solar-cache.json');
 const CACHE_TTL = 25 * 60 * 60 * 1000; // 25 hours — safety net between daily refreshes
@@ -276,8 +277,9 @@ app.get('/api/solar-video', async (req, res) => {
     const url = await generateSolarVideo();
     res.json({ url, cached: false });
   } catch (err) {
-    console.error('[solar] Generation error:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('[solar] Generation error:', err.message, err.cause ? `— cause: ${err.cause?.message || err.cause}` : '');
+    console.log('[solar] Using local backup video');
+    res.json({ url: '/backup_sun_movie.mp4', cached: false });
   }
 });
 
