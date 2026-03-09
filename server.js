@@ -8,6 +8,9 @@ const PORT = process.env.PORT || 3000;
 // ── Bluesky authentication state ──────────────────────────
 let blueskyAccessToken = null;
 
+// ── Helioviewer API base URL ───────────────────────────────
+const HELIOVIEWER_API = 'https://api.helioviewer.org/v2';
+
 // ── Solar video cache ─────────────────────────────────────
 const CACHE_FILE = path.join(__dirname, 'solar-cache.json');
 const CACHE_TTL = 25 * 60 * 60 * 1000; // 25 hours — safety net between daily refreshes
@@ -65,7 +68,7 @@ app.get('/api/helioviewer/:endpoint', async (req, res) => {
   const qsIndex = fullUrl.indexOf('?');
   const rawQuery = qsIndex !== -1 ? fullUrl.substring(qsIndex) : '';
 
-  const url = `https://api.helioviewer.org/v2/${endpoint}/${rawQuery}`;
+  const url = `${HELIOVIEWER_API}/${endpoint}/${rawQuery}`;
 
   console.log(`[proxy] ${endpoint} → ${url}`);
 
@@ -133,7 +136,7 @@ async function generateSolarVideo() {
   const startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const formatISO = d => d.toISOString().replace('.000Z', 'Z');
 
-  const queueUrl = `https://api.helioviewer.org/v2/queueMovie/?` +
+  const queueUrl = `${HELIOVIEWER_API}/queueMovie/?` +
     `startTime=${formatISO(startTime)}` +
     `&endTime=${formatISO(endTime)}` +
     `&layers=[13,1,100]` +
@@ -168,7 +171,7 @@ async function generateSolarVideo() {
     await new Promise(resolve => setTimeout(resolve, pollInterval));
     polls++;
 
-    const statusUrl = `https://api.helioviewer.org/v2/getMovieStatus/?id=${movieId}&format=mp4&verbose=true`;
+    const statusUrl = `${HELIOVIEWER_API}/getMovieStatus/?id=${movieId}&format=mp4&verbose=true`;
     const statusResponse = await fetch(statusUrl);
     if (!statusResponse.ok) {
       console.warn(`[solar] Poll error: ${statusResponse.status}`);
@@ -204,7 +207,7 @@ async function generateSolarVideo() {
   videoCache.timestamp = Date.now();
   saveCacheToDisk();
 
-  console.log('[solar] ✓ Video generated and cached');
+  console.log(`[solar] ✓ Video generated and cached — ${videoUrl}`);
   return videoUrl;
 }
 
@@ -229,6 +232,12 @@ function scheduleDailyRefresh() {
     scheduleDailyRefresh(); // schedule next day regardless
   }, ms);
 }
+
+// ── Cache status endpoint ──────────────────────────────────
+app.get('/api/solar-status', (_req, res) => {
+  const age = videoCache.timestamp ? Math.floor((Date.now() - videoCache.timestamp) / 60000) : null;
+  res.json({ url: videoCache.url, ageMinutes: age, valid: !!videoCache.url && age < (CACHE_TTL / 60000) });
+});
 
 // ── Reset cache endpoint (clears cache without regenerating) ──
 // Trigger with: GET /api/solar-reset (or reloadSun() in the browser console)
@@ -266,7 +275,7 @@ app.get('/api/solar-video', async (req, res) => {
   if (videoCache.url && videoCache.timestamp) {
     const age = Date.now() - videoCache.timestamp;
     if (age < CACHE_TTL) {
-      console.log(`[solar] Cache hit (age: ${Math.floor(age / 60000)}m)`);
+      console.log(`[solar] Cache hit (age: ${Math.floor(age / 60000)}m) — ${videoCache.url}`);
       return res.json({ url: videoCache.url, cached: true });
     }
   }
@@ -276,7 +285,7 @@ app.get('/api/solar-video', async (req, res) => {
     const url = await generateSolarVideo();
     res.json({ url, cached: false });
   } catch (err) {
-    console.error('[solar] Generation error:', err.message);
+    console.error('[solar] Generation error:', err.message, err.cause ? `— cause: ${err.cause?.message || err.cause}` : '');
     res.status(500).json({ error: err.message });
   }
 });
