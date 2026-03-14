@@ -1,3 +1,19 @@
+// Project: Solar Observations
+// Author:  Paul Calver <pcalv001@gold.ac.uk>
+//
+// ── server.js ─────────────────────────────────────────────────────────────────
+// Express backend for the Solar Loop installation.
+//
+// Responsibilities:
+//   1. Proxy requests to the Helioviewer API (avoids CORS issues in the browser)
+//   2. Queue and poll a 24-hour solar timelapse from Helioviewer, then cache it
+//      so multiple visitors share one render rather than each triggering their own
+//   3. Fetch Bluesky posts about the sun, run them through a regex pre-screen,
+//      then a Gemini semantic filter, and serve the curated results
+//   4. Log kept posts to Airtable for review
+//   5. Authenticate with Bluesky and silently refresh the token before it expires
+// ─────────────────────────────────────────────────────────────────────────────
+
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
@@ -6,18 +22,25 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Bluesky authentication state ──────────────────────────
+// Stored in memory; refreshed every 90 minutes (tokens expire after ~2 hours)
 let blueskyAccessToken = null;
 
 
 // ── Solar video cache ─────────────────────────────────────
+// The cache persists across server restarts by writing to solar-cache.json.
+// TTL is 25 hours so the daily scheduler always has a valid video to serve
+// even if the scheduled refresh runs slightly late.
 const CACHE_FILE = path.join(__dirname, 'solar-cache.json');
 const CACHE_TTL = 25 * 60 * 60 * 1000; // 25 hours — safety net between daily refreshes
 
+// In-memory cache: populated from disk on startup, updated after each generation
 let videoCache = {
-  url: null,
-  timestamp: null
+  url: null,       // full URL of the mp4 on Helioviewer's CDN
+  timestamp: null  // Date.now() when the URL was obtained
 };
 
+// Read a previously saved cache file into memory on startup.
+// Silently ignores missing or malformed files.
 function loadCacheFromDisk() {
   try {
     if (fs.existsSync(CACHE_FILE)) {
@@ -32,6 +55,7 @@ function loadCacheFromDisk() {
   }
 }
 
+// Persist the current in-memory cache to disk so it survives server restarts.
 function saveCacheToDisk() {
   try {
     fs.writeFileSync(CACHE_FILE, JSON.stringify({ url: videoCache.url, timestamp: videoCache.timestamp }));
@@ -41,15 +65,18 @@ function saveCacheToDisk() {
 }
 
 // ── Solar generation progress (shared across requests) ────
+// Updated live during generateSolarVideo() so the browser can poll
+// /api/solar-progress and show a frame counter to the visitor.
 let solarProgress = {
-  active: false,
-  progress: 0,
-  framesProcessed: 0,
-  numFrames: 720,
-  statusLabel: ''
+  active: false,        // true while a generation is in flight
+  progress: 0,          // 0–1 fraction reported by Helioviewer
+  framesProcessed: 0,   // absolute frame count (displayed in UI)
+  numFrames: 720,       // total frames in the requested movie
+  statusLabel: ''       // human-readable status string from Helioviewer
 };
 
 // ── Solar progress endpoint ───────────────────────────────
+// Polled every 2 seconds by sun.js while a video is generating.
 app.get('/api/solar-progress', (req, res) => {
   res.json(solarProgress);
 });
@@ -57,7 +84,7 @@ app.get('/api/solar-progress', (req, res) => {
 // ── Proxy endpoint for Helioviewer API ───────────────────────
 // Declared BEFORE static files so it takes priority.
 // Uses raw query string to preserve bracket characters
-// that Express's query parser would mangle.
+// that Express's query parser would mangle (e.g. layers=[13,1,100]).
 app.get('/api/helioviewer/:endpoint', async (req, res) => {
   const endpoint = req.params.endpoint;
 
@@ -79,7 +106,7 @@ app.get('/api/helioviewer/:endpoint', async (req, res) => {
     console.log(`[proxy] Content-Type: ${contentType}`);
     console.log(`[proxy] Body preview: ${body.substring(0, 200)}...`);
 
-    // Try to parse as JSON
+    // Try to parse as JSON; fall back to forwarding raw text if not valid JSON
     try {
       const data = JSON.parse(body);
       res.json(data);
@@ -96,6 +123,10 @@ app.get('/api/helioviewer/:endpoint', async (req, res) => {
 });
 
 // ── Authenticate with Bluesky ─────────────────────────────
+// Uses the AT Protocol createSession endpoint to exchange credentials
+// for a short-lived JWT. Returns the token, or null if auth fails/
+// credentials are missing (the app still works unauthenticated, just
+// with tighter API rate limits).
 async function authenticateBluesky() {
   const identifier = process.env.BLUESKY_IDENTIFIER;
   const password = process.env.BLUESKY_APP_PASSWORD;
@@ -120,7 +151,7 @@ async function authenticateBluesky() {
 
     const data = await response.json();
     console.log('[bluesky] ✓ Authenticated successfully');
-    return data.accessJwt;
+    return data.accessJwt; // JWT used as Bearer token in subsequent requests
   } catch (err) {
     console.error('[bluesky] Authentication error:', err.message);
     return null;
@@ -128,12 +159,24 @@ async function authenticateBluesky() {
 }
 
 // ── Solar video generation (shared by endpoint + scheduler) ──
+// Queues a 24-hour solar timelapse on Helioviewer, then polls until it is
+// ready (status 2) or failed (status 3). Updates solarProgress throughout
+// so the browser can show a live frame counter. Saves the resulting URL
+// to both in-memory and disk cache before returning.
 async function generateSolarVideo() {
   const now = new Date();
   const endTime = new Date(now);
+  // Go back exactly 24 hours for a full-day timelapse
   const startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  // Helioviewer expects ISO 8601 without milliseconds
   const formatISO = d => d.toISOString().replace('.000Z', 'Z');
 
+  // Build the queue URL:
+  //   layers=[13,1,100]  → SDO/AIA 304 Å (ultraviolet, chromosphere)
+  //   imageScale=2.42    → arcseconds per pixel
+  //   x1/y1/x2/y2       → bounding box in arcseconds (full-disk)
+  //   cadence=120        → one frame every 2 minutes
+  //   maxFrames=720      → 720 frames × 2 min = 24 hours
   const queueUrl = `https://api.helioviewer.org/v2/queueMovie/?` +
     `startTime=${formatISO(startTime)}` +
     `&endTime=${formatISO(endTime)}` +
@@ -158,6 +201,7 @@ async function generateSolarVideo() {
   const movieId = queueData.id;
   console.log(`[solar] Movie queued: ${movieId}`);
 
+  // Poll every 3 seconds for up to 6 minutes (120 × 3s)
   const maxPolls = 120;
   const pollInterval = 3000;
   let polls = 0;
@@ -179,6 +223,7 @@ async function generateSolarVideo() {
 
     const progress = statusData.progress || 0;
     const numFrames = statusData.numFrames || 720;
+    // Update shared progress so the /api/solar-progress endpoint stays current
     solarProgress = {
       active: true,
       progress,
@@ -190,17 +235,21 @@ async function generateSolarVideo() {
     console.log(`[solar] Poll ${polls}/${maxPolls}: ${statusData.statusLabel} (${Math.round(progress * 100)}%)`);
 
     if (statusData.status === 2) {
+      // Status 2 = complete; grab the URL and stop polling
       videoUrl = statusData.url;
       break;
     } else if (statusData.status === 3) {
+      // Status 3 = error reported by Helioviewer
       throw new Error(statusData.error || 'Movie generation failed');
     }
   }
 
+  // Reset progress state now that generation is done
   solarProgress = { active: false, progress: 1, framesProcessed: 0, numFrames: 0, statusLabel: '' };
 
   if (!videoUrl) throw new Error('Movie generation timed out');
 
+  // Persist URL so future requests skip generation entirely
   videoCache.url = videoUrl;
   videoCache.timestamp = Date.now();
   saveCacheToDisk();
@@ -210,6 +259,10 @@ async function generateSolarVideo() {
 }
 
 // ── Daily midnight scheduler ───────────────────────────────
+// Calculates the milliseconds until the next UTC midnight and sets a
+// one-shot timeout. When it fires it regenerates the video, then
+// schedules itself again for the following midnight — so this keeps
+// running indefinitely without drift accumulating over multiple days.
 function scheduleDailyRefresh() {
   const now = new Date();
   const nextMidnight = new Date(Date.UTC(
@@ -232,6 +285,8 @@ function scheduleDailyRefresh() {
 }
 
 // ── Reset cache endpoint (clears cache without regenerating) ──
+// Wipes both in-memory and disk cache. The next request to /api/solar-video
+// will trigger a fresh generation.
 // Trigger with: GET /api/solar-reset (or reloadSun() in the browser console)
 app.get('/api/solar-reset', (_req, res) => {
   videoCache = { url: null, timestamp: null };
@@ -246,6 +301,7 @@ app.get('/api/solar-reset', (_req, res) => {
 
 // ── Manual refresh endpoint (for external cron services) ──
 // Trigger with: GET /api/refresh?token=YOUR_REFRESH_TOKEN
+// REFRESH_TOKEN is optional; omit it in .env to allow unauthenticated access.
 app.get('/api/refresh', async (req, res) => {
   const secret = process.env.REFRESH_TOKEN;
   if (secret && req.query.token !== secret) {
@@ -261,7 +317,13 @@ app.get('/api/refresh', async (req, res) => {
 });
 
 // ── Solar video endpoint ───────────────────────────────────
+// Main endpoint called by sun.js on page load.
+// Returns a cached URL immediately if one exists and is fresh.
+// Otherwise generates a new video (which may take several minutes).
+// On any generation failure, falls back to the local backup video
+// so the installation never shows an empty screen.
 app.get('/api/solar-video', async (req, res) => {
+  // Prevent the browser from caching this response — we manage caching ourselves
   res.set('Cache-Control', 'no-store');
 
   if (videoCache.url && videoCache.timestamp) {
@@ -278,12 +340,16 @@ app.get('/api/solar-video', async (req, res) => {
     res.json({ url, cached: false });
   } catch (err) {
     console.error('[solar] Generation error:', err.message, err.cause ? `— cause: ${err.cause?.message || err.cause}` : '');
+    // Serve the bundled backup so the screen stays active during API outages
     console.log('[solar] Using local backup video');
     res.json({ url: '/backup_sun_movie.mp4', cached: false });
   }
 });
 
 // ── Bluesky: search phrases ────────────────────────────────
+// Each phrase is searched independently in parallel. They are chosen to
+// surface genuine first-person observations about the physical sun and light,
+// rather than news, sports, or metaphorical uses of the word "sun".
 const SEARCH_PHRASES = [
   'the sun felt',
   'the sun looked',
@@ -307,10 +373,14 @@ const SEARCH_PHRASES = [
 ];
 
 // ── Bluesky: fetch posts for one phrase ───────────────────
+// Searches Bluesky for a single phrase, returning up to 50 recent
+// English posts. Automatically retries with a fresh token if the
+// current JWT has expired.
 async function fetchPhrase(phrase) {
   const url = `https://bsky.social/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(phrase)}&limit=50&sort=latest&lang=en`;
   const headers = {
     'Accept': 'application/json',
+    // Mimic a real browser to avoid being blocked by bot-detection
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept-Language': 'en-US,en;q=0.9',
     'Cache-Control': 'no-cache'
@@ -321,7 +391,7 @@ async function fetchPhrase(phrase) {
 
   if (!response.ok) {
     const body = await response.text();
-    // Handle expired/invalid token
+    // Handle expired/invalid token — re-auth and retry once
     let isAuthError = response.status === 401;
     if (!isAuthError) {
       try { isAuthError = JSON.parse(body).error === 'ExpiredToken'; } catch {}
@@ -334,7 +404,7 @@ async function fetchPhrase(phrase) {
         if (retry.ok) return (await retry.json()).posts || [];
       }
     }
-    return [];
+    return []; // Return empty on any unrecoverable error
   }
 
   const data = await response.json();
@@ -342,41 +412,46 @@ async function fetchPhrase(phrase) {
 }
 
 // ── Bluesky: pre-screen with fast regex ───────────────────
+// First-pass filter applied before sending posts to Gemini.
+// Removes obvious noise cheaply (duplicates, URLs, sports, news,
+// date refs, offensive content) so Gemini sees only plausible candidates.
 function preScreenPosts(rawPosts) {
-  const seen = new Set();
+  const seen = new Set(); // deduplicate by exact text
   const results = [];
 
   for (const post of rawPosts) {
     const text = post.record?.text || '';
+    // Skip empty posts and anything longer than a standard tweet
     if (!text || text.length === 0 || text.length > 280) continue;
     if (seen.has(text)) continue;
     seen.add(text);
 
     // Must contain a sun-related word
     if (!/\b(sun|sunshine|sunlight|sunset|sunrise|golden hour|solar|sunny)\b/i.test(text)) continue;
-    // No URLs
+    // No URLs — suggests promotional or article-sharing content
     if (/https?:\/\/|www\.|[a-z0-9-]+\.(com|org|net|io|co)/i.test(text)) continue;
-    // Max one hashtag
+    // Max one hashtag — more than one suggests a marketing post
     if ((text.match(/#/g) || []).length > 1) continue;
     // No newspaper / news-style content
     if (/sun-times|daily sun|the sun newspaper|telegraph|the sun (reports?|says?|published|wrote|exclusive|revealed|claims?)|in the sun|on the sun|from the sun|breaking|headlines?|article|news:/i.test(text)) continue;
     // No sports
     if (/phoenix suns|gold coast suns|jacksonville suns|the suns (win|lose|beat|play|vs|defeat|scored)|suns (game|win|lose|beat|play|vs|defeat|scored)|#nba|#afl|#nfl|#mlb|#nhl|afl grand final|football|basketball|baseball|soccer/i.test(text)) continue;
-    // No date references (Sunday, Sun 16th, etc.)
+    // No date references (Sunday, Sun 16th, etc.) — "sun" here is short for Sunday
     if (/\bsunday\b|sun[,\s]+\d{1,2}(st|nd|rd|th)?|sun[,\s]+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|on sun\b|this sun\b|next sun\b|last sun\b/i.test(text)) continue;
     // No explicit / offensive content
     if (/sex|dungeon|nsfw|18\+|explicit|porn|dick|cock|cumshot|fuck|shit|damn|hell(?!o)|ass(?!ume)|bitch/i.test(text)) continue;
     // No hate speech
     if (/racist|propaganda|racism|antisemitic|antisemitism|islamophob|xenophob|homophob|transphob|bigot|nazi|kkk|white supremac/i.test(text)) continue;
-    // No emoji
+    // No emoji — keeps the display clean and text-focused
     if (/\p{Emoji_Presentation}|\p{Extended_Pictographic}/u.test(text)) continue;
-    // No birthday
+    // No birthday mentions
     if (/birthday/i.test(text)) continue;
-    // No photography hashtags or VRChat
+    // No photography hashtags or VRChat references
     if (/#photograph|#photo\b|#vrc|vrchat/i.test(text)) continue;
 
     results.push({
       text,
+      // Strip the .bsky.social suffix so the author handle reads cleanly in the UI
       author: post.author?.handle?.replace('.bsky.social', '') || 'unknown',
       time: post.record?.createdAt || new Date().toISOString()
     });
@@ -386,15 +461,21 @@ function preScreenPosts(rawPosts) {
 }
 
 // ── Airtable: track already-logged posts to avoid duplicates
+// In-memory set; resets on server restart, but that's acceptable
+// since the table is primarily used for archival review.
 const loggedTexts = new Set();
 
 // ── Airtable: log kept posts (one row per post) ───────────
+// Called after Gemini filtering to record which posts were displayed.
+// Sends records in batches of 10 to comply with the Airtable API limit.
+// Silently skips if credentials are missing.
 async function logToAirtable(sentPosts, keptIndices) {
   const token = process.env.AIRTABLE_TOKEN;
   const baseId = process.env.AIRTABLE_BASE_ID;
   if (!token || !baseId) return;
 
   const keptSet = new Set(keptIndices);
+  // Only log posts that Gemini kept AND that haven't been logged this session
   const keptPosts = sentPosts
     .filter((_, i) => keptSet.has(i))
     .filter(p => !loggedTexts.has(p.text));
@@ -431,9 +512,9 @@ async function logToAirtable(sentPosts, keptIndices) {
       if (!response.ok) {
         const err = await response.text();
         console.warn(`[airtable] Log failed ${response.status}: ${err.substring(0, 200)}`);
-        break;
+        break; // Stop on first batch error to avoid flooding with failures
       }
-      batch.forEach(p => loggedTexts.add(p.text));
+      batch.forEach(p => loggedTexts.add(p.text)); // Mark as logged
       logged += batch.length;
     } catch (err) {
       console.warn('[airtable] Log error:', err.message);
@@ -445,6 +526,11 @@ async function logToAirtable(sentPosts, keptIndices) {
 }
 
 // ── Gemini: semantic filter ────────────────────────────────
+// Second-pass filter using Google Gemini 2.5 Flash to understand
+// the meaning of posts — catches nuanced cases that regex misses
+// (e.g. metaphors that passed the keyword check, subtle sports refs).
+// Falls back to returning all pre-screened posts if the API is
+// unavailable or over quota.
 async function geminiFilter(posts) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -454,6 +540,7 @@ async function geminiFilter(posts) {
 
   if (posts.length === 0) return posts;
 
+  // Number each post so Gemini can reference them by index in its response
   const numbered = posts.map((p, i) => `${i + 1}. ${p.text}`).join('\n');
 
   const prompt = `You are filtering social media posts for an art installation that displays poetic, sensory observations about the physical sun and sunlight.
@@ -487,6 +574,8 @@ Reply with ONLY a JSON array of the numbers to KEEP, e.g. [1, 3, 7]. No explanat
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
+        // temperature: 0 for deterministic output; thinkingBudget: 0 disables
+        // chain-of-thought reasoning to reduce latency and token usage
         generationConfig: { temperature: 0, maxOutputTokens: 1024, thinkingConfig: { thinkingBudget: 0 } }
       })
     });
@@ -500,45 +589,48 @@ Reply with ONLY a JSON array of the numbers to KEEP, e.g. [1, 3, 7]. No explanat
       } else {
         console.warn(`[gemini] API error ${response.status}: ${err}`);
       }
-      return posts; // fallback
+      return posts; // fallback: show pre-screened posts rather than nothing
     }
 
     const data = await response.json();
     const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     console.log(`[gemini] Raw response: ${raw.trim()}`);
 
-    // Extract JSON array from response
+    // Extract the JSON array from the response (e.g. "[1, 3, 7]")
     const match = raw.match(/\[[\d,\s]+\]/);
     if (!match) {
       console.warn('[gemini] Could not parse response, keeping all pre-screened posts');
       return posts;
     }
 
-    const keptIndices = JSON.parse(match[0]).map(n => n - 1); // convert to 0-based
+    const keptIndices = JSON.parse(match[0]).map(n => n - 1); // convert 1-based to 0-based
     const keepSet = new Set(keptIndices);
     const filtered = posts.filter((_, i) => keepSet.has(i));
     console.log(`[gemini] ✓ Filtering complete — kept ${filtered.length}/${posts.length} posts`);
 
-    // Log to Airtable (fire-and-forget — don't block the response)
+    // Log to Airtable fire-and-forget — errors here should not block the API response
     logToAirtable(posts, keptIndices).catch(() => {});
 
     return filtered;
   } catch (err) {
     console.error('[gemini] Error:', err.message);
-    return posts; // fallback
+    return posts; // fallback on any unexpected error
   }
 }
 
 // ── Filtered posts cache (avoids hammering Gemini) ────────
+// Gemini has generous but finite daily quotas. Caching for 10 minutes
+// means a busy installation makes at most ~144 Gemini calls per day.
 const POSTS_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 let postsCache = { posts: null, timestamp: null };
 
 // ── Filtered Bluesky endpoint ──────────────────────────────
-// Fetches all phrases in parallel, pre-screens with regex,
-// then uses Gemini to semantically filter before returning.
-// Results are cached for 10 minutes to avoid Gemini rate limits.
+// Full pipeline: fetch all search phrases in parallel → regex pre-screen
+// → shuffle and cap at 80 → Gemini semantic filter → format timestamps.
+// Results are cached for 10 minutes to stay within Gemini rate limits.
+// On error, returns stale cache if available so the UI always has content.
 app.get('/api/bluesky/filtered', async (_req, res) => {
-  // Return cached result if fresh
+  // Return cached result if still fresh
   if (postsCache.posts && postsCache.timestamp && (Date.now() - postsCache.timestamp) < POSTS_CACHE_TTL) {
     const age = Math.floor((Date.now() - postsCache.timestamp) / 1000);
     console.log(`[bluesky] Cache hit (age: ${age}s), returning ${postsCache.posts.length} posts`);
@@ -548,12 +640,13 @@ app.get('/api/bluesky/filtered', async (_req, res) => {
   console.log('[bluesky] /api/bluesky/filtered — fetching all phrases in parallel...');
 
   try {
-    // Fetch all phrases in parallel
+    // Fetch all search phrases simultaneously — using allSettled so one
+    // failed phrase doesn't abort the entire batch
     const results = await Promise.allSettled(
       SEARCH_PHRASES.map(phrase => fetchPhrase(phrase))
     );
 
-    // Flatten successful results
+    // Flatten fulfilled results; silently drop rejected ones
     const allRaw = results.flatMap(r => r.status === 'fulfilled' ? r.value : []);
     console.log(`[bluesky] ${allRaw.length} raw posts from ${SEARCH_PHRASES.length} phrases`);
 
@@ -561,13 +654,14 @@ app.get('/api/bluesky/filtered', async (_req, res) => {
     const preScreened = preScreenPosts(allRaw);
     console.log(`[bluesky] ${preScreened.length} posts after pre-screen`);
 
-    // Shuffle and cap before sending to Gemini (to stay within token limits)
+    // Shuffle before capping so we don't always send the same phrases' posts
+    // to Gemini. Cap at 80 to stay comfortably within token limits.
     const shuffled = preScreened.sort(() => Math.random() - 0.5).slice(0, 80);
 
     // Semantic filter with Gemini
     const filtered = await geminiFilter(shuffled);
 
-    // Format relative time for client
+    // Convert ISO timestamps to human-readable relative strings for the UI
     const now = Date.now();
     const formatted = filtered.map(p => {
       const then = new Date(p.time).getTime();
@@ -591,7 +685,7 @@ app.get('/api/bluesky/filtered', async (_req, res) => {
     res.json({ posts: formatted });
   } catch (err) {
     console.error('[bluesky] /api/bluesky/filtered error:', err.message);
-    // Return stale cache if available, otherwise empty
+    // Return stale cache rather than an empty array — keeps the UI populated
     if (postsCache.posts) {
       console.log('[bluesky] Returning stale cache after error');
       return res.json({ posts: postsCache.posts });
@@ -601,12 +695,16 @@ app.get('/api/bluesky/filtered', async (_req, res) => {
 });
 
 // ── Proxy endpoint for Bluesky API ────────────────────────────
+// General-purpose proxy for raw Bluesky search requests. Handles
+// token expiry with a transparent re-auth + retry, and returns an
+// empty posts array on failure so the client can fall back gracefully.
 app.get('/api/bluesky/search', async (req, res) => {
   const fullUrl = req.originalUrl;
   const qsIndex = fullUrl.indexOf('?');
   const rawQuery = qsIndex !== -1 ? fullUrl.substring(qsIndex) : '';
 
-  // Use authenticated endpoint (bsky.social) instead of public endpoint
+  // Use authenticated endpoint (bsky.social) instead of the public endpoint
+  // for higher rate limits and access to more results
   const url = `https://bsky.social/xrpc/app.bsky.feed.searchPosts${rawQuery}`;
 
   console.log(`[proxy] bluesky → ${url}`);
@@ -644,7 +742,7 @@ app.get('/api/bluesky/search', async (req, res) => {
         console.log('[bluesky] Token expired, re-authenticating...');
         blueskyAccessToken = await authenticateBluesky();
 
-        // Retry request with new token
+        // Retry the original request with the new token
         if (blueskyAccessToken) {
           headers['Authorization'] = `Bearer ${blueskyAccessToken}`;
           const retryResponse = await fetch(url, { headers });
@@ -653,7 +751,8 @@ app.get('/api/bluesky/search', async (req, res) => {
         }
       }
 
-      // Return empty result instead of error - let client handle fallback
+      // Return empty result instead of propagating the error — let the
+      // client fall back to curated posts rather than showing an error state
       console.log('[bluesky] API error, returning empty result for fallback');
       return res.json({ posts: [] });
     }
@@ -662,18 +761,21 @@ app.get('/api/bluesky/search', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error('[proxy] Bluesky error:', err.message);
-    // Return empty result for fallback instead of 500 error
+    // Return empty result for fallback instead of a 500 error
     res.json({ posts: [] });
   }
 });
 
 // ── Serve static files AFTER api routes ──────────────────────
+// Order matters: API routes above take priority over anything in /public
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.listen(PORT, async () => {
   console.log(`\n  Solar Loop Viewer running at:`);
   console.log(`  → http://localhost:${PORT}\n`);
 
+  // On startup: restore disk cache, kick off the daily scheduler,
+  // and authenticate with Bluesky
   loadCacheFromDisk();
   scheduleDailyRefresh();
   blueskyAccessToken = await authenticateBluesky();
@@ -688,6 +790,7 @@ app.listen(PORT, async () => {
   }
 
   // Bluesky access tokens expire after ~2 hours — refresh every 90 minutes
+  // to stay ahead of expiry without interrupting live requests
   setInterval(async () => {
     console.log('[bluesky] Proactive token refresh...');
     blueskyAccessToken = await authenticateBluesky();

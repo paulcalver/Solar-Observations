@@ -1,11 +1,29 @@
-// ── Bluesky Feed Integration ──────────────────────────────────────────────────
-// Fetches and displays poetic observations about the sun
+// Project: Solar Observations
+// Author:  Paul Calver <pcalv001@gold.ac.uk>
+//
+// ── bluesky.js ────────────────────────────────────────────────────────────────
+// Client-side controller for the Bluesky post overlay.
+//
+// Flow:
+//   1. On load, fetch filtered posts from /api/bluesky/filtered (server handles
+//      all the heavy lifting: Bluesky search → regex pre-screen → Gemini filter)
+//   2. Shuffle the returned posts and display them one at a time, fading between
+//      them every 12 seconds. A click on the overlay advances to the next post.
+//   3. Re-fetch fresh posts every 5 minutes so long-running sessions stay current.
+//   4. If the server returns no posts or errors, fall back to the CURATED_POSTS
+//      list below so the overlay is never empty.
+//
+// The overlay waits for window.solarVideoReady (set by sun.js) before showing
+// the first post, so text never appears over a blank loading screen.
+// ─────────────────────────────────────────────────────────────────────────────
 
 (function() {
-  const AUTO_ROTATE_INTERVAL = 12000; // 12 seconds
-  const FETCH_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  const AUTO_ROTATE_INTERVAL = 12000; // 12 seconds between post transitions
+  const FETCH_INTERVAL = 5 * 60 * 1000; // Re-fetch from server every 5 minutes
 
   // ── Curated fallback observations ─────────────────────────
+  // Hand-written posts in the style of real Bluesky observations.
+  // Displayed when the API is unavailable or returns no results.
   const CURATED_POSTS = [
     { text: "the sun felt like a warm hug on my face this morning", author: "observer", time: "2h ago" },
     { text: "golden hour hit different today, everything looked like honey", author: "skygazer", time: "4h ago" },
@@ -25,9 +43,9 @@
   ];
 
   // ── State ──────────────────────────────────────────────────
-  let posts = [];
-  let currentIndex = 0;
-  let autoRotateTimer = null;
+  let posts = [];           // Currently loaded post list (shuffled)
+  let currentIndex = 0;    // Index of the post currently on screen
+  let autoRotateTimer = null; // Handle for the auto-advance setTimeout
 
   // ── DOM refs ───────────────────────────────────────────────
   const overlay = document.getElementById('bluesky-overlay');
@@ -35,6 +53,8 @@
   const postMeta = document.getElementById('post-meta');
 
   // ── Shuffle array (Fisher-Yates) ──────────────────────────
+  // Randomises the order of posts so visitors don't always see the
+  // same sequence, and different phrases' results are interleaved.
   function shuffleArray(array) {
     const shuffled = [...array];
     for (let i = shuffled.length - 1; i > 0; i--) {
@@ -45,6 +65,9 @@
   }
 
   // ── Fetch filtered posts from server ───────────────────────
+  // Calls /api/bluesky/filtered which returns already-filtered posts
+  // (Bluesky search → regex pre-screen → Gemini filter, cached 10 min).
+  // Falls back to curated posts if the server errors or returns nothing.
   async function fetchPosts() {
     console.log('[bluesky] Fetching filtered posts from server...');
     try {
@@ -62,7 +85,8 @@
         currentIndex = 0;
         console.log(`[bluesky] ${posts.length} posts ready`);
 
-        // Wait for solar video before showing first post
+        // Wait for the solar video to be visible before showing the first post
+        // so text never overlays a loading spinner
         if (window.solarVideoReady) {
           window.solarVideoReady.then(() => showCurrentPost());
         } else {
@@ -79,10 +103,13 @@
   }
 
   // ── Use curated posts as fallback ──────────────────────────
+  // Loads the hand-written CURATED_POSTS list and begins showing them.
+  // Called whenever the live API is unavailable or returns no results.
   function useFallbackPosts() {
     console.log('[bluesky] Using curated fallback posts');
     posts = shuffleArray(CURATED_POSTS);
     currentIndex = 0;
+    // Still wait for the solar video to be ready before displaying
     if (window.solarVideoReady) {
       window.solarVideoReady.then(() => showCurrentPost());
     } else {
@@ -91,6 +118,9 @@
   }
 
   // ── Scale text to fit ─────────────────────────────────────
+  // Shrinks the font size in 2px steps until the text fits within
+  // 85% of the viewport width and 50% of its height, stopping at 24px.
+  // This handles both short punchy posts and longer multi-line ones.
   function scaleTextToFit() {
     const maxSize = 36;
     const minSize = 24;
@@ -113,27 +143,32 @@
   }
 
   // ── Display current post ───────────────────────────────────
+  // Fades the overlay out, swaps in new content, scales the text,
+  // then fades back in. Also resets the auto-rotate timer so the
+  // next advance is always a full interval from now.
   function showCurrentPost() {
     if (posts.length === 0) return;
 
     const post = posts[currentIndex];
 
-    overlay.style.opacity = '0';
+    overlay.style.opacity = '0'; // Begin fade-out via CSS transition
 
     setTimeout(() => {
+      // Wrap text in quotes if not already quoted
       const displayText = post.text.startsWith('"') ? post.text : `"${post.text}"`;
       postText.textContent = displayText;
       postMeta.textContent = `@${post.author} · ${post.time}`;
 
       scaleTextToFit();
 
-      overlay.style.opacity = '1';
-    }, 300);
+      overlay.style.opacity = '1'; // Begin fade-in
+    }, 300); // Wait 300ms for fade-out to complete before swapping content
 
     resetAutoRotate();
   }
 
   // ── Next post ──────────────────────────────────────────────
+  // Advances the index cyclically through the posts array.
   function nextPost() {
     if (posts.length === 0) return;
     currentIndex = (currentIndex + 1) % posts.length;
@@ -141,16 +176,19 @@
   }
 
   // ── Auto-rotate timer ──────────────────────────────────────
+  // Clears any existing timer and starts a fresh countdown to nextPost().
+  // Called after every show so clicking to advance resets the clock.
   function resetAutoRotate() {
     if (autoRotateTimer) clearTimeout(autoRotateTimer);
     autoRotateTimer = setTimeout(() => nextPost(), AUTO_ROTATE_INTERVAL);
   }
 
   // ── Click to advance ───────────────────────────────────────
+  // Tapping the overlay skips to the next post immediately.
   overlay.addEventListener('click', () => nextPost());
 
   // ── Initialize ─────────────────────────────────────────────
-  fetchPosts();
-  setInterval(fetchPosts, FETCH_INTERVAL);
+  fetchPosts(); // Load posts immediately on page load
+  setInterval(fetchPosts, FETCH_INTERVAL); // Refresh every 5 minutes
 
 })();

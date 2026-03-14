@@ -69,6 +69,10 @@ public/
 - Google AI Studio API key with billing enabled (for Gemini filtering)
 - Internet connection (Helioviewer, Bluesky, and Gemini APIs)
 
+## Author
+
+**Paul Calver** — pcalv001@gold.ac.uk
+
 ## Credits
 
 - Solar imagery: [NASA SDO](https://sdo.gsfc.nasa.gov/) via [Helioviewer](https://helioviewer.org/)
